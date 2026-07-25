@@ -110,25 +110,38 @@ Key seams:
       into TUI, dialog race both directions (TUI dialog dismissed on web win,
       cancel on TUI win), /web off + restart with fresh token/port
 
-### Phase 4 — polish
+### Phase 4 — polish (DONE)
 
-- [ ] Inline compaction summary entry on live `compaction_end` (currently toast-only;
-      historical compactionSummary messages already render)
-- [ ] Mobile UX pass: touch targets, safe areas, Enter-vs-send behavior
-- [ ] Custom theme dirs (`~/.pi/agent/themes`) in the web theme loader
-- [ ] Diff rendering for edit/write tools (args oldText/newText), like the TUI
-- [ ] Read-only `.jsonl` session viewer (no agent process), building on session
-      format + export_html
+- [x] Inline compaction summary entry on live `compaction_end` (synthesized
+      compactionSummary message appended; historical ones already rendered)
+- [x] Mobile UX pass: touch targets (36-44px), safe-area insets, Enter=newline +
+      send button on coarse pointers, 16px editor font (no iOS zoom),
+      overscroll containment
+- [x] Theme list endpoint (`GET /themes`, built-in + custom + registered,
+      TUI resolution semantics) + theme picker in the web footer; custom theme
+      dirs work; theme-schema.json excluded
+- [x] Diff rendering for edit (oldText/newText line diff via `diff` package)
+      and write (all-added) tools, mirroring TUI colors
+- [x] Read-only `.jsonl` session viewer: `pi --web --view <file>`, no agent
+      process/model/auth needed (SessionManager.open + buildSessionContext,
+      write commands rejected); verified against a real session file
 
-### Phase 5 — remote access & convergence
+### Phase 5 — remote access & convergence (MOSTLY DONE)
 
-- [ ] `packages/server` convergence: host the same web UI + WS protocol for
-      supervised RPC instances; fix `LiveInstance.onUiRequest` single-handler
-      limitation (broadcast to all subscribers, first response wins)
-- [ ] Radius relay for off-LAN access (presence exists; `capabilities.relay` is
-      currently false)
-- [ ] Optional: `pi --attach <instance>` making the TUI a client of the server,
-      unifying TUI and web as symmetrical clients
+- [x] `packages/server` convergence: `server serve --web [--web-port] [--web-host]`
+      hosts the pi web UI for supervised instances (index at `/`, per-instance
+      SPA at `/i/<id>/`, RPC-over-WS at `/i/<id>/ws`, token auth); web client
+      derives its WS path from the page base path
+- [x] Fixed `LiveInstance.onUiRequest` single-handler limitation: uiSubscribers
+      fan-out, first-response-wins, synthesized `extension_ui_cancel` (the
+      child's own cancel only reaches the answering channel); also fixed RPC
+      child spawn under Node (`import.meta.resolve` for the exports map)
+- [x] Verified e2e: two web clients through the server, event fan-out, dialog
+      broadcast + first-response-wins cancel, notify broadcast
+- [ ] Radius relay for off-LAN access — BLOCKED externally: requires relay
+      support in the hosted radius service (capabilities.relay stays false)
+- [ ] Optional (deferred): `pi --attach <instance>` making the TUI a client of
+      the server — large architectural change, superseded for now by the web UI
 
 ## Notes / known gaps
 

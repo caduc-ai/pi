@@ -3,6 +3,7 @@ import type {
 	AgentSessionEvent,
 	AgentSessionEventListener,
 	RpcCommand,
+	RpcExtensionUICancel,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcResponse,
@@ -18,11 +19,16 @@ interface LiveInstanceResources {
 	sessionId?: string;
 }
 
+/** UI messages streamed to clients: dialog requests, plus cancels synthesized on first-response-wins. */
+export type UiStreamMessage = RpcExtensionUIRequest | RpcExtensionUICancel;
+
 interface LiveInstance {
 	record: InstanceRecord;
 	resources: LiveInstanceResources;
 	subscribers: Set<AgentSessionEventListener>;
-	onUiRequest?: (request: RpcExtensionUIRequest) => void;
+	uiSubscribers: Set<(message: UiStreamMessage) => void>;
+	/** Dialog ids already answered by some stream client; later responses are dropped. */
+	answeredDialogs: Set<string>;
 	unsubscribeEvents?: () => void;
 	unsubscribeExit?: () => void;
 }
@@ -92,7 +98,8 @@ export class ServerSupervisor {
 		live.unsubscribeExit?.();
 		live.unsubscribeEvents = undefined;
 		live.unsubscribeExit = undefined;
-		live.onUiRequest = undefined;
+		live.uiSubscribers.clear();
+		live.answeredDialogs.clear();
 		live.resources.rpcProcess?.setUiRequestHandler(undefined);
 	}
 
@@ -108,7 +115,11 @@ export class ServerSupervisor {
 			void this.handleUnexpectedRpcExit(live, error);
 		});
 		rpcProcess.setUiRequestHandler((request) => {
-			live.onUiRequest?.(request);
+			// New dialog: clear any stale answered marker (ids are unique, this is just hygiene)
+			live.answeredDialogs.delete(request.id);
+			for (const subscriber of live.uiSubscribers) {
+				subscriber(request);
+			}
 		});
 	}
 
@@ -197,7 +208,7 @@ export class ServerSupervisor {
 	openRpcStream(
 		instanceId: string,
 		onEvent: (event: AgentSessionEvent) => void,
-		onUiRequest: (request: RpcExtensionUIRequest) => void,
+		onUiMessage: (message: UiStreamMessage) => void,
 	):
 		| {
 				handleRpc(command: RpcCommand): Promise<RpcResponse>;
@@ -211,7 +222,7 @@ export class ServerSupervisor {
 			return undefined;
 		}
 		live.subscribers.add(onEvent);
-		live.onUiRequest = onUiRequest;
+		live.uiSubscribers.add(onUiMessage);
 		return {
 			handleRpc: async (command) => {
 				const response = await rpcProcess.send(command);
@@ -221,12 +232,23 @@ export class ServerSupervisor {
 				return response;
 			},
 			handleUiResponse: (response) => {
+				// First response wins: forward to the child and cancel all other clients.
+				// (The child's own extension_ui_cancel for answered dialogs is only sent to
+				// the answering channel, which is this supervisor, so we synthesize it here.)
+				if (live.answeredDialogs.has(response.id)) {
+					return;
+				}
+				live.answeredDialogs.add(response.id);
 				rpcProcess.handleUiResponse(response);
+				const cancel: RpcExtensionUICancel = { type: "extension_ui_cancel", id: response.id };
+				for (const subscriber of live.uiSubscribers) {
+					if (subscriber !== onUiMessage) {
+						subscriber(cancel);
+					}
+				}
 			},
 			close: () => {
-				if (live.onUiRequest === onUiRequest) {
-					live.onUiRequest = undefined;
-				}
+				live.uiSubscribers.delete(onUiMessage);
 				live.subscribers.delete(onEvent);
 			},
 		};
@@ -280,6 +302,8 @@ export class ServerSupervisor {
 			},
 			resources: {},
 			subscribers: new Set(),
+			uiSubscribers: new Set(),
+			answeredDialogs: new Set(),
 		};
 		this.liveInstances.set(live.record.id, live);
 		upsertInstance(live.record);

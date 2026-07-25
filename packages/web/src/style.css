@@ -113,6 +113,7 @@ body {
 .chat {
 	flex: 1;
 	overflow-y: auto;
+	overscroll-behavior-y: contain;
 	padding: 12px 14px;
 	display: flex;
 	flex-direction: column;
@@ -310,11 +311,33 @@ body {
 	overflow-x: auto;
 }
 
-.tool-output.collapsed {
+.tool-body.collapsed {
 	max-height: 12em;
 	overflow: hidden;
 	mask-image: linear-gradient(to bottom, black 60%, transparent);
 	-webkit-mask-image: linear-gradient(to bottom, black 60%, transparent);
+}
+
+.diff {
+	margin: 0;
+	padding: 6px 10px 0;
+	font-size: inherit;
+	white-space: pre-wrap;
+	overflow-x: auto;
+}
+
+.diff-add {
+	background: var(--pi-toolSuccessBg);
+	color: var(--pi-toolOutput);
+}
+
+.diff-del {
+	background: var(--pi-toolErrorBg);
+	color: var(--pi-toolOutput);
+}
+
+.diff-ctx {
+	color: var(--pi-muted);
 }
 
 .tool-toggle {
@@ -597,6 +620,11 @@ body {
 	cursor: pointer;
 	padding: 0;
 	text-decoration: underline;
+	max-width: 8em;
+}
+
+select.theme-toggle {
+	text-decoration: none;
 }
 
 .working-indicator {
@@ -766,5 +794,29 @@ body {
 
 	.tool-output {
 		font-size: 12px;
+	}
+}
+
+/* Touch devices: larger tap targets, no iOS focus zoom, send via button */
+@media (pointer: coarse) {
+	.editor-input {
+		font-size: 16px;
+	}
+
+	.editor-button {
+		padding: 8px 14px;
+	}
+
+	.tool-title {
+		min-height: 36px;
+	}
+
+	.tool-toggle {
+		padding: 8px 10px;
+	}
+
+	.autocomplete-entry {
+		min-height: 44px;
+		align-items: center;
 	}
 }

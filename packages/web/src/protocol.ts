@@ -234,7 +234,7 @@ export type AgentSessionEvent =
 	| {
 			type: "compaction_end";
 			reason: "manual" | "threshold" | "overflow";
-			result?: { summary?: string };
+			result?: { summary: string; tokensBefore: number };
 			aborted: boolean;
 			willRetry: boolean;
 			errorMessage?: string;

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 import { getSocketPath } from "./config.ts";
@@ -5,8 +6,16 @@ import { handleIpcRequest, openRpcStream } from "./handler.ts";
 import { startIpcServer } from "./ipc/server.ts";
 import { getRadiusServerBaseUrl, isRadiusEnabled, radiusPresence } from "./radius.ts";
 import { supervisor } from "./supervisor.ts";
+import { type ServerWebHandle, startServerWeb } from "./web.ts";
 
-export async function serve(): Promise<void> {
+export interface ServeOptions {
+	web?: {
+		host?: string;
+		port?: number;
+	};
+}
+
+export async function serve(options: ServeOptions = {}): Promise<void> {
 	const socketPath = getSocketPath();
 	mkdirSync(dirname(socketPath), { recursive: true });
 	const server = await startIpcServer(
@@ -36,6 +45,15 @@ export async function serve(): Promise<void> {
 
 	console.log(`server listening on ${socketPath}`);
 
+	let webHandle: ServerWebHandle | undefined;
+	if (options.web) {
+		const token = randomBytes(16).toString("base64url");
+		const host = options.web.host ?? "127.0.0.1";
+		webHandle = await startServerWeb({ host, port: options.web.port ?? 0, token });
+		const displayHost = host === "0.0.0.0" || host === "::" ? "<this-machine>" : host;
+		console.log(`web UI: http://${displayHost}:${webHandle.port}/?token=${token}`);
+	}
+
 	let shutdownPromise: Promise<void> | undefined;
 	const shutdown = async (exitCode: number) => {
 		if (shutdownPromise) {
@@ -45,6 +63,7 @@ export async function serve(): Promise<void> {
 
 		shutdownPromise = (async () => {
 			server.close();
+			await webHandle?.close();
 			await supervisor.shutdown();
 			await radiusPresence.stop();
 			if (existsSync(socketPath)) {

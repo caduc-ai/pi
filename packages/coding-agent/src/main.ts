@@ -48,6 +48,7 @@ import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts"
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
+import { runWebViewMode } from "./web/view-mode.ts";
 
 const EXTENSION_LOAD_FAILURE_HINT = 'Hint: Start without extensions using "pi -ne".';
 
@@ -561,6 +562,16 @@ export async function main(args: string[], options?: MainOptions) {
 			console.error(chalk.red("Error: @file arguments are not supported in web mode"));
 			process.exit(1);
 		}
+	}
+
+	if (parsed.view !== undefined && !parsed.web) {
+		console.error(chalk.red("Error: --view requires --web"));
+		process.exit(1);
+	}
+
+	if (parsed.web && parsed.view !== undefined) {
+		// Read-only session viewer: no model, auth, or session runtime required
+		await runWebViewMode(parsed.view, { host: parsed.webHost, port: parsed.webPort });
 	}
 
 	validateForkFlags(parsed);

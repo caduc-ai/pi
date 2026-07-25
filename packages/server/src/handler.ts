@@ -1,7 +1,6 @@
 import type {
 	AgentSessionEvent,
 	RpcCommand,
-	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcResponse,
 } from "@earendil-works/pi-coding-agent";
@@ -23,6 +22,7 @@ import type {
 	StopRequest,
 	StopResponse,
 } from "./ipc/protocol.ts";
+import type { UiStreamMessage } from "./supervisor.ts";
 import { supervisor } from "./supervisor.ts";
 import type { InstanceRecord } from "./types.ts";
 
@@ -133,14 +133,14 @@ export function openRpcStream(
 	instanceId: string,
 	onResponse: (response: RpcResponse) => void,
 	onSessionEvent: (event: AgentSessionEvent) => void,
-	onUiRequest: (request: RpcExtensionUIRequest) => void,
+	onUiMessage: (message: UiStreamMessage) => void,
 ):
 	| {
 			handleRequest(request: RpcCommand | RpcExtensionUIResponse): Promise<void>;
 			close(): void;
 	  }
 	| undefined {
-	const handle = supervisor.openRpcStream(instanceId, onSessionEvent, onUiRequest);
+	const handle = supervisor.openRpcStream(instanceId, onSessionEvent, onUiMessage);
 	if (!handle) {
 		return undefined;
 	}

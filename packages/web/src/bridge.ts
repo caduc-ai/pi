@@ -13,8 +13,9 @@
  *   PI_WEB_PI_ARGS      extra args for pi, space-separated (e.g. "--provider anthropic --model claude-...")
  */
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,7 @@ import { WebSocketServer } from "ws";
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
 const themeDir = join(repoRoot, "packages", "coding-agent", "src", "modes", "interactive", "theme");
+const customThemeDir = join(homedir(), ".pi", "agent", "themes");
 
 const port = Number(process.env.PI_WEB_BRIDGE_PORT ?? 4464);
 const targetCwd = process.env.PI_WEB_CWD ?? process.cwd();
@@ -69,24 +71,48 @@ child.stdout.on("data", (chunk: Buffer) => {
 	}
 });
 
-async function handleTheme(request: IncomingMessage, response: ServerResponse): Promise<void> {
-	const match = /^\/theme\/([a-z-]+)\.json$/.exec(request.url ?? "");
+async function listThemeNames(): Promise<string[]> {
+	const names = new Set<string>();
+	for (const dir of [themeDir, customThemeDir]) {
+		try {
+			for (const file of await readdir(dir)) {
+				if (file.endsWith(".json") && !file.startsWith("theme-schema")) names.add(file.slice(0, -".json".length));
+			}
+		} catch {
+			// dir does not exist
+		}
+	}
+	return [...names].sort((a, b) => a.localeCompare(b));
+}
+
+async function handleThemes(request: IncomingMessage, response: ServerResponse): Promise<void> {
+	if (request.url === "/themes") {
+		response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+		response.end(JSON.stringify({ themes: await listThemeNames() }));
+		return;
+	}
+	const match = /^\/theme\/([a-zA-Z0-9][a-zA-Z0-9._-]*)\.json$/.exec(request.url ?? "");
 	if (!match) {
 		response.writeHead(404).end("not found");
 		return;
 	}
-	try {
-		const content = await readFile(join(themeDir, `${match[1]}.json`), "utf-8");
-		response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
-		response.end(content);
-	} catch {
-		response.writeHead(404).end("theme not found");
+	// Built-in themes take precedence on name conflicts, matching the TUI
+	for (const dir of [themeDir, customThemeDir]) {
+		try {
+			const content = await readFile(join(dir, `${match[1]}.json`), "utf-8");
+			response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+			response.end(content);
+			return;
+		} catch {
+			// try next dir
+		}
 	}
+	response.writeHead(404).end("theme not found");
 }
 
 const server = createServer((request, response) => {
-	if (request.url?.startsWith("/theme/")) {
-		void handleTheme(request, response);
+	if (request.url === "/themes" || request.url?.startsWith("/theme/")) {
+		void handleThemes(request, response);
 		return;
 	}
 	response.writeHead(426).end("websocket required");

@@ -6,10 +6,13 @@ export { type Args, parseArgs } from "./cli/args.ts";
 export {
 	CONFIG_DIR_NAME,
 	getAgentDir,
+	getCustomThemesDir,
 	getDocsPath,
 	getExamplesPath,
 	getPackageDir,
 	getReadmePath,
+	getThemesDir,
+	getWebDistDir,
 	VERSION,
 } from "./config.ts";
 export {
@@ -335,6 +338,7 @@ export {
 	type RpcClientOptions,
 	type RpcCommand,
 	type RpcEventListener,
+	type RpcExtensionUICancel,
 	type RpcExtensionUIRequest,
 	type RpcExtensionUIResponse,
 	type RpcResponse,

@@ -40,9 +40,12 @@
 		"node": ">=22.19.0"
 	},
 	"dependencies": {
-		"@earendil-works/pi-coding-agent": "^0.82.1"
+		"@earendil-works/pi-coding-agent": "^0.82.1",
+		"@earendil-works/pi-web": "^0.82.1",
+		"ws": "8.21.1"
 	},
 	"devDependencies": {
+		"@types/ws": "8.18.1",
 		"shx": "0.4.0"
 	}
 }

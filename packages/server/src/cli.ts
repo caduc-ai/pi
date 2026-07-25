@@ -18,7 +18,7 @@ const packageJson = JSON.parse(readFileSync(join(__dirname, "../package.json"), 
 
 function printHelp(): void {
 	console.log(
-		`server v${packageJson.version}\n\nUsage:\n  server serve\n  server list\n  server spawn [--cwd <path>] [--label <label>]\n  server status <instance-id>\n  server stop <instance-id>\n  server rpc <instance-id> <json-command>\n  server rpc-stream <instance-id>\n  server --help\n  server --version\n\nRPC stream stdin expects JSONL RpcCommand or extension_ui_response messages.`,
+		`server v${packageJson.version}\n\nUsage:\n  server serve [--web [--web-port <port>] [--web-host <host>]]\n  server list\n  server spawn [--cwd <path>] [--label <label>]\n  server status <instance-id>\n  server stop <instance-id>\n  server rpc <instance-id> <json-command>\n  server rpc-stream <instance-id>\n  server --help\n  server --version\n\nRPC stream stdin expects JSONL RpcCommand or extension_ui_response messages.`,
 	);
 }
 
@@ -90,6 +90,16 @@ async function main(): Promise<void> {
 	}
 
 	if (args[0] === "serve") {
+		if (args.includes("--web")) {
+			const webPortValue = getFlagValue(args, "--web-port");
+			const webPort = webPortValue !== undefined ? Number(webPortValue) : undefined;
+			if (webPort !== undefined && (!Number.isInteger(webPort) || webPort < 0 || webPort > 65535)) {
+				console.error("--web-port requires an integer between 0 and 65535");
+				process.exit(1);
+			}
+			await serve({ web: { host: getFlagValue(args, "--web-host"), port: webPort } });
+			return;
+		}
 		await serve();
 		return;
 	}

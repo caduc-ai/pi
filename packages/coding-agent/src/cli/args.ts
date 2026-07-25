@@ -49,6 +49,7 @@ export interface Args {
 	web?: boolean;
 	webPort?: number;
 	webHost?: string;
+	view?: string;
 	projectTrustOverride?: boolean;
 	messages: string[];
 	fileArgs: string[];
@@ -197,6 +198,8 @@ export function parseArgs(args: string[]): Args {
 			}
 		} else if (arg === "--web-host" && i + 1 < args.length) {
 			result.webHost = args[++i];
+		} else if (arg === "--view" && i + 1 < args.length) {
+			result.view = args[++i];
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
 		} else if (arg.startsWith("--")) {
@@ -258,6 +261,7 @@ ${chalk.bold("Options:")}
   --web                          Serve the session to the pi web UI over HTTP/WebSocket
   --web-port <port>              Web UI port (default: random free port)
   --web-host <host>              Web UI bind address (default: 127.0.0.1)
+  --view <file>                  View a session file read-only in the web UI (with --web)
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session
   --resume, -r                   Select a session to resume
@@ -311,6 +315,9 @@ ${chalk.bold("Examples:")}
 
   # Serve this session to the web UI (prints a URL with an auth token)
   ${APP_NAME} --web
+
+  # View a recorded session file in the web UI (read-only)
+  ${APP_NAME} --web --view ~/${CONFIG_DIR_NAME}/agent/sessions/--path--/session.jsonl
 
   # Multiple messages (interactive)
   ${APP_NAME} "Read package.json" "What dependencies do we have?"

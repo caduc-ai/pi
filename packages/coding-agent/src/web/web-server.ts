@@ -13,8 +13,14 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
 import { type WebSocket, WebSocketServer } from "ws";
-import { getCustomThemesDir, getThemesDir, getWebDistDir } from "../config.ts";
-import type { RpcBridge } from "../modes/rpc/rpc-bridge.ts";
+import { getWebDistDir } from "../config.ts";
+import { getAvailableThemesWithPaths } from "../modes/interactive/theme/theme.ts";
+import type { RpcClientConnection, RpcClientHandle } from "../modes/rpc/rpc-bridge.ts";
+
+/** Anything that can serve RPC protocol clients; RpcBridge for live sessions, SessionViewBridge for viewers. */
+export interface WebBridge {
+	attachClient(connection: RpcClientConnection): RpcClientHandle;
+}
 
 const COOKIE_NAME = "pi_web_token";
 const WS_HIGH_WATER_BYTES = 16 * 1024 * 1024;
@@ -36,7 +42,7 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 export interface WebServerOptions {
-	bridge: RpcBridge;
+	bridge: WebBridge;
 	host: string;
 	port: number;
 	token: string;
@@ -98,16 +104,12 @@ function sendFile(response: http.ServerResponse, filePath: string, immutable: bo
 	fs.createReadStream(filePath).pipe(response);
 }
 
-/** Serve a theme JSON by name from the built-in themes dir, then custom themes dir. */
+/** Serve a theme JSON by theme name, resolved like the TUI (built-in + custom + registered). */
 function resolveThemeFile(name: string): string | undefined {
-	if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.json$/.test(name)) return undefined;
-	for (const dir of [getThemesDir(), getCustomThemesDir()]) {
-		const candidate = path.join(dir, name);
-		if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-			return candidate;
-		}
-	}
-	return undefined;
+	if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) return undefined;
+	const theme = getAvailableThemesWithPaths().find((info) => info.name === name);
+	if (!theme?.path) return undefined;
+	return fs.existsSync(theme.path) && fs.statSync(theme.path).isFile() ? theme.path : undefined;
 }
 
 export async function startWebServer(options: WebServerOptions): Promise<WebServerHandle> {
@@ -145,6 +147,12 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
 		if (request.method !== "GET" && request.method !== "HEAD") {
 			sendText(response, 405, "Method not allowed\n");
+			return;
+		}
+
+		if (url.pathname === "/themes") {
+			response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+			response.end(JSON.stringify({ themes: getAvailableThemesWithPaths().map((info) => info.name) }));
 			return;
 		}
 

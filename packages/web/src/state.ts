@@ -64,8 +64,11 @@ export function pushToast(message: string, kind: Toast["kind"] = "info"): void {
 // Client wiring
 // ============================================================================
 
+// The app is served at / by pi --web and at /i/<instance-id>/ by pi-server;
+// the WS endpoint is always at <base>ws.
 const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
-export const client = new RpcClient(`${wsProtocol}://${location.host}/ws`, {
+const basePath = location.pathname.endsWith("/") ? location.pathname : `${location.pathname}/`;
+export const client = new RpcClient(`${wsProtocol}://${location.host}${basePath}ws`, {
 	onEvent: handleEvent,
 	onUiRequest: handleUiRequest,
 	onUiCancel: (id) => {
@@ -296,6 +299,18 @@ function applyEvent(event: AgentSessionEvent): void {
 			if (event.errorMessage) {
 				pushToast(`Compaction failed: ${event.errorMessage}`, "error");
 			} else if (!event.aborted) {
+				if (event.result) {
+					// Mirror the compactionSummary message the session appends to its history
+					messages.value = [
+						...messages.value,
+						{
+							role: "compactionSummary",
+							summary: event.result.summary,
+							tokensBefore: event.result.tokensBefore,
+							timestamp: Date.now(),
+						},
+					];
+				}
 				pushToast("Context compacted", "info");
 				refreshStats();
 			}

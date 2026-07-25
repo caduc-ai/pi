@@ -1,7 +1,10 @@
 /**
- * Loads pi TUI theme JSON files (same files the interactive mode uses) and
- * applies them as CSS custom properties (--pi-<colorName>).
+ * Loads pi TUI theme JSON files (same files the interactive mode uses: built-in
+ * dark/light plus any custom themes the server lists) and applies them as CSS
+ * custom properties (--pi-<colorName>).
  */
+
+import { signal } from "@preact/signals";
 
 interface ThemeJson {
 	name: string;
@@ -14,9 +17,10 @@ interface ThemeJson {
 	};
 }
 
-export type ThemeName = "dark" | "light";
-
 const THEME_STORAGE_KEY = "pi-web-theme";
+
+export const themeName = signal("dark");
+export const availableThemes = signal<string[]>(["dark", "light"]);
 
 // Standard xterm 256-color palette conversion for themes that use color indices.
 function ansi256ToHex(index: number): string {
@@ -65,14 +69,36 @@ function resolveColor(theme: ThemeJson, value: string | number, seen: Set<string
 	return undefined;
 }
 
-export function currentThemeName(): ThemeName {
-	const stored = localStorage.getItem(THEME_STORAGE_KEY);
-	if (stored === "dark" || stored === "light") return stored;
-	return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+async function loadAvailableThemes(): Promise<void> {
+	try {
+		const response = await fetch("/themes");
+		if (!response.ok) return;
+		const data = (await response.json()) as { themes?: unknown };
+		if (Array.isArray(data.themes) && data.themes.length > 0 && data.themes.every((t) => typeof t === "string")) {
+			availableThemes.value = data.themes as string[];
+		}
+	} catch {
+		// Older servers and the dev bridge may not list themes; keep defaults
+	}
 }
 
-export async function applyTheme(name: ThemeName): Promise<void> {
-	const response = await fetch(`/theme/${name}.json`);
+function defaultThemeName(themes: string[]): string {
+	if (window.matchMedia("(prefers-color-scheme: light)").matches && themes.includes("light")) {
+		return "light";
+	}
+	return themes.includes("dark") ? "dark" : themes[0];
+}
+
+export async function initTheme(): Promise<void> {
+	await loadAvailableThemes();
+	const themes = availableThemes.value;
+	const stored = localStorage.getItem(THEME_STORAGE_KEY);
+	const name = stored && themes.includes(stored) ? stored : defaultThemeName(themes);
+	await applyTheme(name);
+}
+
+export async function applyTheme(name: string): Promise<void> {
+	const response = await fetch(`/theme/${encodeURIComponent(name)}.json`);
 	if (!response.ok) {
 		throw new Error(`Failed to load theme: ${response.status}`);
 	}
@@ -100,10 +126,7 @@ export async function applyTheme(name: ThemeName): Promise<void> {
 		style.setProperty("--pi-cardBg", theme.export.cardBg);
 	}
 
-	root.style.colorScheme = name;
+	root.style.colorScheme = /light/i.test(name) ? "light" : "dark";
 	localStorage.setItem(THEME_STORAGE_KEY, name);
-}
-
-export async function toggleTheme(): Promise<void> {
-	await applyTheme(currentThemeName() === "dark" ? "light" : "dark");
+	themeName.value = name;
 }

@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
 	AgentSessionEvent,
 	RpcCommand,
@@ -15,8 +15,6 @@ interface PendingRequest {
 	resolve(response: RpcResponse): void;
 	reject(error: Error): void;
 }
-
-const require = createRequire(import.meta.url);
 
 function toError(error: unknown): Error {
 	return error instanceof Error ? error : new Error(String(error));
@@ -56,7 +54,8 @@ export class RpcProcessInstance {
 		}
 		return {
 			command: process.execPath,
-			args: [require.resolve("@earendil-works/pi-coding-agent/rpc-entry")],
+			// import.meta.resolve matches the "import" condition in the package exports map
+			args: [fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry"))],
 		};
 	}
 

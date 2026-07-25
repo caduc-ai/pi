@@ -35,6 +35,10 @@ const autocompleteOpen = computed(() => autocompleteMatches.value.length > 0);
 
 const isBusy = computed(() => sessionState.value?.isStreaming === true || workingMessage.value !== undefined);
 
+// On touch devices Enter inserts a newline (no Shift key on virtual keyboards);
+// the send button is the send affordance. On desktop Enter sends.
+const isCoarsePointer = window.matchMedia("(pointer: coarse)").matches;
+
 function readFileAsImage(file: File): Promise<ImageContent> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
@@ -105,7 +109,7 @@ export function Editor() {
 				return;
 			}
 		}
-		if (event.key === "Enter" && !event.shiftKey) {
+		if (event.key === "Enter" && !event.shiftKey && !isCoarsePointer) {
 			event.preventDefault();
 			void send();
 			return;
@@ -186,7 +190,7 @@ export function Editor() {
 					class="editor-input"
 					placeholder={isBusy.value ? "Steer the agent…" : "Send a message…"}
 					rows={1}
-					enterkeyhint="send"
+					enterkeyhint={isCoarsePointer ? "enter" : "send"}
 					value={editorText.value}
 					onInput={(event) => {
 						editorText.value = (event.target as HTMLTextAreaElement).value;

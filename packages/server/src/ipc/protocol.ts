@@ -1,6 +1,7 @@
 import type {
 	AgentSessionEvent,
 	RpcCommand,
+	RpcExtensionUICancel,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcResponse,
@@ -118,6 +119,7 @@ export type RpcServerMessage =
 	| RpcResponse
 	| AgentSessionEvent
 	| RpcExtensionUIRequest
+	| RpcExtensionUICancel
 	| ErrorResponse;
 export type ProtocolMessage = ServerRequest | ServerResponse | RpcClientMessage | RpcServerMessage;
 

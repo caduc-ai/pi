@@ -1,5 +1,5 @@
 import { sessionState, stats, statusEntries, workingMessage } from "../state.ts";
-import { currentThemeName, toggleTheme } from "../theme.ts";
+import { applyTheme, availableThemes, themeName } from "../theme.ts";
 
 function formatTokens(count: number): string {
 	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
@@ -34,16 +34,20 @@ export function Footer() {
 					)}
 					{sessionStats && <span title="Session cost">${sessionStats.cost.toFixed(4)}</span>}
 					{sessionStats && <span title="Total tokens">{formatTokens(sessionStats.tokens.total)}</span>}
-					<button
-						type="button"
+					<select
 						class="theme-toggle"
-						title="Toggle theme"
-						onClick={() => {
-							void toggleTheme();
+						title="Theme"
+						value={themeName.value}
+						onChange={(event) => {
+							void applyTheme((event.target as HTMLSelectElement).value);
 						}}
 					>
-						{currentThemeName() === "dark" ? "dark" : "light"}
-					</button>
+						{availableThemes.value.map((name) => (
+							<option key={name} value={name}>
+								{name}
+							</option>
+						))}
+					</select>
 				</span>
 			</div>
 		</footer>
