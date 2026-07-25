@@ -68,6 +68,9 @@ const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
 export const client = new RpcClient(`${wsProtocol}://${location.host}/ws`, {
 	onEvent: handleEvent,
 	onUiRequest: handleUiRequest,
+	onUiCancel: (id) => {
+		dialogQueue.value = dialogQueue.value.filter((queued) => queued.id !== id);
+	},
 	onConnectionChange: handleConnectionChange,
 });
 

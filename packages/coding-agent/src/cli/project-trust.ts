@@ -12,7 +12,8 @@ export function createProjectTrustContext(options: {
 }): ProjectTrustContext {
 	return {
 		cwd: options.cwd,
-		mode: options.mode === "interactive" ? "tui" : options.mode,
+		// Web mode presents the RPC extension surface
+		mode: options.mode === "interactive" ? "tui" : options.mode === "web" ? "rpc" : options.mode,
 		hasUI: options.hasUI,
 		ui: {
 			select: async (title, selectOptions) => {

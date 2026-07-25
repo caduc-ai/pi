@@ -68,25 +68,37 @@ Key seams:
 - [x] Verified: `npm run check` clean; end-to-end prompt/stream/tool events through
       bridge and Vite proxy; `vite build` (75KB gzip)
 
-### Phase 2 — in-process bridge + `pi --web` (NEXT)
+### Phase 2 — in-process bridge + `pi --web` (DONE)
 
-- [ ] Refactor rpc-mode event/command translation into a reusable sink
-- [ ] `packages/coding-agent/src/web/`: HTTP server (static assets from
-      `@earendil-works/pi-web` dist) + WS endpoint + per-share token auth
-      (random 128-bit, required on HTTP + WS upgrade)
-- [ ] `pi --web [--web-port N] [--web-host 127.0.0.1]`: headless web-only mode,
-      prints URL + token (+ QR code)
-- [ ] Build/packaging: `packages/web` builds before coding-agent; bridge resolves
-      dist via package exports; **Bun single-binary build needs the assets embedded
-      (release blocker, check build-binaries.yml)**
-- [ ] Decide how `packages/web` is published (currently `private: true`)
+- [x] Refactored rpc-mode: protocol implementation extracted to `RpcBridge`
+      (`src/modes/rpc/rpc-bridge.ts`), multi-client by design (broadcast events/UI
+      requests, targeted command responses, per-client `drain()` backpressure);
+      rpc-mode.ts is now a thin stdin/stdout wrapper. RPC tests pass.
+- [x] `packages/coding-agent/src/web/`: `web-server.ts` (HTTP static + WS + theme
+      endpoint) and `web-mode.ts` (runWebMode). Auth: per-run 128-bit token,
+      `/?token=` sets an HttpOnly SameSite=Strict cookie; all HTTP + WS upgrade
+      require it (timing-safe compare).
+- [x] `pi --web [--web-port N] [--web-host 127.0.0.1]` headless mode, prints URL +
+      token; conflicts with --mode/--print rejected. (QR code deferred to phase 3.)
+- [x] Protocol addition: `extension_ui_cancel` broadcast when a dialog is answered
+      by another client, times out, or is aborted (first-response-wins). Documented
+      in rpc.md; handled by the web client.
+- [x] Packaging: `@earendil-works/pi-web` is a real published package (dist files),
+      built before coding-agent in root build scripts, added to publish.mjs; Bun
+      binary gets `web/` copied next to the executable (mirrors theme/ handling,
+      resolved via `getWebDistDir()` in config.ts)
+- [x] Verified: `npm run check` clean; RPC tests pass; e2e — auth (401/302/cookie,
+      traversal safe), static + SPA fallback + theme endpoint, WS prompt flow,
+      two-client fan-out, dialog broadcast + first-response-wins cancel, targeted
+      responses
+- [ ] Publish dry-run of pi-web on next release (first-time publish of the package)
 
 ### Phase 3 — share a live TUI session
 
 - [ ] UI multiplexer for extension dialogs (TUI + web, first-response-wins,
       "resolved elsewhere" for losers)
 - [ ] `/web` slash command in interactive mode: start/stop sharing the current
-      session, show URL + QR
+      session, show URL + QR code
 
 ### Phase 4 — polish
 

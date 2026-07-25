@@ -10,6 +10,8 @@ RPC mode enables headless operation of the coding agent via a JSON protocol over
 pi --mode rpc [options]
 ```
 
+The same protocol is also served over WebSocket by web mode (`pi --web`, one JSON message per frame, connecting on `/ws`), which serves the pi web UI from `@earendil-works/pi-web`.
+
 Common options:
 - `--provider <name>`: Set the LLM provider (anthropic, openai, google, etc.)
 - `--model <pattern>`: Model pattern or ID (supports `provider/id` and optional `:<thinking>`)
@@ -1331,6 +1333,16 @@ Dismiss any dialog method. The extension receives `undefined` (for select/input/
 ```json
 {"type": "extension_ui_response", "id": "uuid-3", "cancelled": true}
 ```
+
+### Dialog cancellation (stdout)
+
+Dialogs are first-response-wins across all connected clients. When a dialog is answered by one client, all other clients receive an `extension_ui_cancel` for that request id. The same message is broadcast to all clients when a dialog times out or is aborted by the extension.
+
+```json
+{"type": "extension_ui_cancel", "id": "uuid-1"}
+```
+
+Clients should dismiss the dialog with the given id, if shown.
 
 ## Error Handling
 

@@ -42,6 +42,7 @@
 		"@earendil-works/pi-agent-core": "^0.82.1",
 		"@earendil-works/pi-ai": "^0.82.1",
 		"@earendil-works/pi-tui": "^0.82.1",
+		"@earendil-works/pi-web": "^0.82.1",
 		"@silvia-odwyer/photon-node": "0.3.4",
 		"chalk": "5.6.2",
 		"cross-spawn": "7.0.6",
@@ -56,6 +57,7 @@
 		"semver": "7.8.0",
 		"typebox": "1.1.38",
 		"undici": "8.5.0",
+		"ws": "8.21.1",
 		"yaml": "2.9.0"
 	},
 	"overrides": {
@@ -76,6 +78,7 @@
 		"@types/node": "24.12.4",
 		"@types/proper-lockfile": "4.1.4",
 		"@types/semver": "7.7.1",
+		"@types/ws": "8.18.1",
 		"shx": "0.4.0",
 		"typescript": "5.9.3",
 		"vitest": "4.1.9"

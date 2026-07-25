@@ -295,6 +295,16 @@ export type RpcExtensionUIRequest =
 	| { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
 	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string };
 
+/**
+ * Sent to all clients except the one that answered a dialog, and to all
+ * clients when a dialog times out or is aborted. Dismiss the dialog with
+ * this id, if shown.
+ */
+export interface RpcExtensionUICancel {
+	type: "extension_ui_cancel";
+	id: string;
+}
+
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }

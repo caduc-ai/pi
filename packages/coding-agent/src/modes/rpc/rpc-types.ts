@@ -277,6 +277,16 @@ export type RpcExtensionUIRequest =
 // ============================================================================
 
 /** Response to an extension UI request */
+/**
+ * Sent by the server to all clients except the one that answered a dialog
+ * (select/confirm/input/editor), and to all clients when a dialog times out
+ * or is aborted. Clients should dismiss the dialog with this id, if shown.
+ */
+export interface RpcExtensionUICancel {
+	type: "extension_ui_cancel";
+	id: string;
+}
+
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }

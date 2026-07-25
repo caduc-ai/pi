@@ -9,6 +9,7 @@ const packages = [
 	{ directory: "packages/agent", name: "@earendil-works/pi-agent-core" },
 	{ directory: "packages/storage/sqlite-node", name: "@earendil-works/pi-storage-sqlite-node" },
 	{ directory: "packages/tui", name: "@earendil-works/pi-tui" },
+	{ directory: "packages/web", name: "@earendil-works/pi-web" },
 	{ directory: "packages/coding-agent", name: "@earendil-works/pi-coding-agent" },
 ];
 

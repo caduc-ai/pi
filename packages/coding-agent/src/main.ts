@@ -43,7 +43,7 @@ import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { builtInExtensions } from "./extensions/index.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
-import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
+import { InteractiveMode, runPrintMode, runRpcMode, runWebMode } from "./modes/index.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
@@ -100,6 +100,9 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
 	if (parsed.mode === "rpc") {
 		return "rpc";
+	}
+	if (parsed.web) {
+		return "web";
 	}
 	if (parsed.mode === "json") {
 		return "json";
@@ -538,7 +541,8 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
-	const shouldTakeOverStdout = appMode !== "interactive" && !isPlainRuntimeMetadataCommand(parsed);
+	const shouldTakeOverStdout =
+		appMode !== "interactive" && appMode !== "web" && !isPlainRuntimeMetadataCommand(parsed);
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
 	}
@@ -546,6 +550,17 @@ export async function main(args: string[], options?: MainOptions) {
 	if (parsed.mode === "rpc" && parsed.fileArgs.length > 0) {
 		console.error(chalk.red("Error: @file arguments are not supported in RPC mode"));
 		process.exit(1);
+	}
+
+	if (parsed.web) {
+		if (parsed.mode !== undefined || parsed.print) {
+			console.error(chalk.red("Error: --web cannot be combined with --mode or --print"));
+			process.exit(1);
+		}
+		if (parsed.fileArgs.length > 0) {
+			console.error(chalk.red("Error: @file arguments are not supported in web mode"));
+			process.exit(1);
+		}
 	}
 
 	validateForkFlags(parsed);
@@ -763,9 +778,9 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
-	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
+	// Read piped stdin content (if any) - skip for RPC mode (stdin is the JSON-RPC channel) and web mode
 	let stdinContent: string | undefined;
-	if (appMode !== "rpc") {
+	if (appMode !== "rpc" && appMode !== "web") {
 		stdinContent = await readPipedStdin();
 		if (stdinContent !== undefined && appMode === "interactive") {
 			appMode = "print";
@@ -808,14 +823,17 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(1);
 	}
 
-	// RPC refreshes catalogs here in the background; interactive mode starts its refresh after TUI initialization.
-	if (!offlineMode && appMode === "rpc") {
+	// RPC and web modes refresh catalogs here in the background; interactive mode starts its refresh after TUI initialization.
+	if (!offlineMode && (appMode === "rpc" || appMode === "web")) {
 		void modelRuntime.refresh().catch(() => {});
 	}
 
 	if (appMode === "rpc") {
 		printTimings();
 		await runRpcMode(runtime);
+	} else if (appMode === "web") {
+		printTimings();
+		await runWebMode(runtime, { host: parsed.webHost, port: parsed.webPort });
 	} else if (appMode === "interactive") {
 		const interactiveMode = new InteractiveMode(runtime, {
 			migratedProviders,

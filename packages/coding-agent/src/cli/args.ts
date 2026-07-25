@@ -46,6 +46,9 @@ export interface Args {
 	listModels?: string | true;
 	offline?: boolean;
 	verbose?: boolean;
+	web?: boolean;
+	webPort?: number;
+	webHost?: string;
 	projectTrustOverride?: boolean;
 	messages: string[];
 	fileArgs: string[];
@@ -183,6 +186,17 @@ export function parseArgs(args: string[]): Args {
 			result.projectTrustOverride = false;
 		} else if (arg === "--offline") {
 			result.offline = true;
+		} else if (arg === "--web") {
+			result.web = true;
+		} else if (arg === "--web-port" && i + 1 < args.length) {
+			const port = Number(args[++i]);
+			if (Number.isInteger(port) && port >= 0 && port <= 65535) {
+				result.webPort = port;
+			} else {
+				result.diagnostics.push({ type: "error", message: `--web-port requires an integer between 0 and 65535` });
+			}
+		} else if (arg === "--web-host" && i + 1 < args.length) {
+			result.webHost = args[++i];
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
 		} else if (arg.startsWith("--")) {
@@ -241,6 +255,9 @@ ${chalk.bold("Options:")}
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
   --mode <mode>                  Output mode: text (default), json, or rpc
+  --web                          Serve the session to the pi web UI over HTTP/WebSocket
+  --web-port <port>              Web UI port (default: random free port)
+  --web-host <host>              Web UI bind address (default: 127.0.0.1)
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session
   --resume, -r                   Select a session to resume
@@ -291,6 +308,9 @@ ${chalk.bold("Examples:")}
 
   # Non-interactive mode (process and exit)
   ${APP_NAME} -p "List all .ts files in src/"
+
+  # Serve this session to the web UI (prints a URL with an auth token)
+  ${APP_NAME} --web
 
   # Multiple messages (interactive)
   ${APP_NAME} "Read package.json" "What dependencies do we have?"

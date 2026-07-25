@@ -1,6 +1,7 @@
 import type {
 	AgentSessionEvent,
 	RpcCommand,
+	RpcExtensionUICancel,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcResponse,
@@ -9,6 +10,8 @@ import type {
 export interface RpcClientCallbacks {
 	onEvent(event: AgentSessionEvent): void;
 	onUiRequest(request: RpcExtensionUIRequest): void;
+	/** A dialog was answered by another client, timed out, or was aborted. */
+	onUiCancel(id: string): void;
 	onConnectionChange(connected: boolean): void;
 }
 
@@ -124,6 +127,11 @@ export class RpcClient {
 		}
 		if (message.type === "extension_ui_request") {
 			this.callbacks.onUiRequest(message as unknown as RpcExtensionUIRequest);
+			return;
+		}
+
+		if (message.type === "extension_ui_cancel") {
+			this.callbacks.onUiCancel((message as unknown as RpcExtensionUICancel).id);
 			return;
 		}
 		this.callbacks.onEvent(message as unknown as AgentSessionEvent);

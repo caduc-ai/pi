@@ -1,4 +1,5 @@
 import { accessSync, constants, existsSync, readFileSync, realpathSync } from "fs";
+import { createRequire } from "module";
 import { homedir } from "os";
 import { basename, dirname, join, resolve, sep, win32 } from "path";
 import { fileURLToPath } from "url";
@@ -401,6 +402,19 @@ export function getThemesDir(): string {
 	const packageDir = getPackageDir();
 	const srcOrDist = existsSync(join(packageDir, "src")) ? "src" : "dist";
 	return join(packageDir, srcOrDist, "modes", "interactive", "theme");
+}
+
+/**
+ * Get path to the pi web UI static assets (the @earendil-works/pi-web dist).
+ * - For Bun binary: web/ next to the executable (copied by build-binaries.sh)
+ * - For Node.js: resolved from the installed @earendil-works/pi-web package
+ */
+export function getWebDistDir(): string {
+	if (isBunBinary) {
+		return join(getPackageDir(), "web");
+	}
+	const require = createRequire(import.meta.url);
+	return join(dirname(require.resolve("@earendil-works/pi-web/package.json")), "dist");
 }
 
 /**

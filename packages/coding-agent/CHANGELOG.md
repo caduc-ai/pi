@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added web mode: `pi --web [--web-port <port>] [--web-host <host>]` serves the pi web UI (new `@earendil-works/pi-web` package) over HTTP/WebSocket with a per-run auth token, giving full session control (prompts, steering, abort, extension dialogs) from a browser. Web mode speaks the exact RPC protocol over WebSocket; the protocol gained `extension_ui_cancel` (broadcast when a dialog is answered by another client, times out, or is aborted). See [rpc.md](docs/rpc.md).
+
 ## [0.82.1] - 2026-07-25
 
 ### New Features

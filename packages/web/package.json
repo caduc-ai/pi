@@ -1,29 +1,32 @@
 {
 	"name": "@earendil-works/pi-web",
 	"version": "0.82.1",
-	"private": true,
-	"description": "Web UI for pi sessions (experimental)",
+	"description": "Web UI for the pi coding agent. Static assets served by pi --web; speaks the pi RPC protocol over WebSocket.",
 	"type": "module",
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"dev": "vite",
 		"dev:bridge": "tsx src/bridge.ts",
-		"build": "vite build"
+		"build": "vite build",
+		"prepublishOnly": "npm run clean && npm run build"
 	},
-	"keywords": [
-		"pi",
-		"web",
-		"ui"
+	"files": [
+		"dist/**/*",
+		"README.md"
 	],
-	"author": "Earendil Works",
+	"keywords": [
+		"web",
+		"ui",
+		"preact",
+		"coding-agent",
+		"cli"
+	],
+	"author": "Mario Zechner",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "https://github.com/earendil-works/pi-mono",
 		"directory": "packages/web"
-	},
-	"engines": {
-		"node": ">=22.19.0"
 	},
 	"dependencies": {
 		"@preact/signals": "2.10.0",
@@ -33,10 +36,10 @@
 		"preact": "10.29.7"
 	},
 	"devDependencies": {
-		"@babel/core": "7.29.7",
 		"@preact/preset-vite": "2.10.6",
 		"@types/ws": "8.18.1",
 		"shx": "0.4.0",
+		"tsx": "4.22.1",
 		"vite": "8.1.5",
 		"ws": "8.21.1"
 	}
