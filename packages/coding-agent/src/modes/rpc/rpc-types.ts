@@ -83,10 +83,31 @@ export interface RpcSlashCommand {
 	/** Human-readable description */
 	description?: string;
 	/** What kind of command this is */
-	source: "extension" | "prompt" | "skill";
-	/** Source metadata for the owning resource */
-	sourceInfo: SourceInfo;
+	source: "extension" | "prompt" | "skill" | "builtin";
+	/** Argument hint shown in autocomplete (e.g. "<name>") */
+	argumentHint?: string;
+	/** Source metadata for the owning resource (not set for builtin commands) */
+	sourceInfo?: SourceInfo;
 }
+
+/**
+ * Built-in slash commands that RPC clients can offer. Unlike extension/prompt/
+ * skill commands these are NOT invoked via `prompt`; each maps to RPC command
+ * verbs (documented in rpc.md, section get_commands). State-changing ones
+ * (new, fork, clone, model) should be followed by a fresh get_state/get_messages
+ * sync.
+ */
+export const RPC_BUILTIN_COMMANDS: ReadonlyArray<{ name: string; description: string; argumentHint?: string }> = [
+	{ name: "compact", description: "Compact the session context" },
+	{ name: "new", description: "Start a new session" },
+	{ name: "name", description: "Set session display name", argumentHint: "<name>" },
+	{ name: "model", description: "Select model", argumentHint: "<provider/model>" },
+	{ name: "session", description: "Show session info and stats" },
+	{ name: "export", description: "Export session to HTML on the server", argumentHint: "[path]" },
+	{ name: "copy", description: "Copy last agent message to clipboard" },
+	{ name: "fork", description: "Create a new fork from a previous user message" },
+	{ name: "clone", description: "Duplicate the current session at the current position" },
+];
 
 // ============================================================================
 // RPC State

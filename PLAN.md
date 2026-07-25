@@ -143,6 +143,13 @@ Key seams:
 - [ ] Optional (deferred): `pi --attach <instance>` making the TUI a client of
       the server — large architectural change, superseded for now by the web UI
 
+## Follow-up ideas
+
+- More TUI built-ins could be added over RPC: `/tree` (needs a navigate_tree RPC
+  verb), `/resume` (needs a list_sessions RPC verb), `/reload`, `/settings`.
+- `/export` currently saves on the server filesystem; a download endpoint would
+  let the browser save the HTML directly.
+
 ## Notes / known gaps
 
 - Web runs at http://localhost:5173 in dev (`npm run dev --workspace=@earendil-works/pi-web`)

@@ -167,8 +167,17 @@ export interface SessionStats {
 export interface RpcSlashCommand {
 	name: string;
 	description?: string;
-	source: "extension" | "prompt" | "skill";
+	source: "extension" | "prompt" | "skill" | "builtin";
+	argumentHint?: string;
 	sourceInfo?: Record<string, unknown>;
+}
+
+export interface BashResult {
+	output: string;
+	exitCode: number | undefined;
+	cancelled: boolean;
+	truncated: boolean;
+	fullOutputPath?: string;
 }
 
 // ============================================================================
@@ -187,7 +196,15 @@ export type RpcCommand =
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
 	| { id?: string; type: "compact"; customInstructions?: string }
-	| { id?: string; type: "set_session_name"; name: string };
+	| { id?: string; type: "set_session_name"; name: string }
+	| { id?: string; type: "new_session"; parentSession?: string }
+	| { id?: string; type: "get_available_models" }
+	| { id?: string; type: "bash"; command: string; excludeFromContext?: boolean }
+	| { id?: string; type: "export_html"; outputPath?: string }
+	| { id?: string; type: "get_last_assistant_text" }
+	| { id?: string; type: "get_fork_messages" }
+	| { id?: string; type: "fork"; entryId: string }
+	| { id?: string; type: "clone" };
 
 export type RpcResponse =
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }

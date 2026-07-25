@@ -3,7 +3,9 @@ import { RpcClient } from "./client.ts";
 import type {
 	AgentMessage,
 	AgentSessionEvent,
+	BashResult,
 	ImageContent,
+	Model,
 	RpcExtensionUIRequest,
 	RpcResponse,
 	RpcSessionState,
@@ -444,4 +446,217 @@ export async function sendPrompt(text: string, images: ImageContent[]): Promise<
 export async function sendAbort(): Promise<void> {
 	const response = await client.command({ type: "abort" });
 	reportFailure(response, "Abort failed");
+}
+
+// ============================================================================
+// Builtin slash commands (mapped to RPC command verbs, see rpc.md get_commands)
+// ============================================================================
+
+/** Transient card shown at the bottom of the chat (e.g. /session output). */
+export const commandResult = signal<{ title: string; markdown: string } | undefined>(undefined);
+export const modelPickerOpen = signal(false);
+export const forkPickerOpen = signal(false);
+
+function formatTokenCount(count: number): string {
+	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+	if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
+	return String(count);
+}
+
+/** Run a bash command (! prefix in the editor). */
+export async function sendBash(command: string): Promise<void> {
+	if (command.trim() === "") return;
+	const response = await client.command({ type: "bash", command });
+	if (!response.success) {
+		reportFailure(response, "Bash failed");
+		return;
+	}
+	const result = dataAs<BashResult>(response, "bash");
+	// The session records a bashExecution message; mirror it locally until the next sync
+	messages.value = [
+		...messages.value,
+		{
+			role: "bashExecution",
+			command,
+			output: result?.output ?? "",
+			exitCode: result?.exitCode,
+			cancelled: result?.cancelled ?? false,
+			truncated: result?.truncated ?? false,
+			fullOutputPath: result?.fullOutputPath,
+			timestamp: Date.now(),
+		},
+	];
+	refreshStats();
+}
+
+async function setModelByQuery(query: string): Promise<void> {
+	const response = await client.command({ type: "get_available_models" });
+	const models = dataAs<{ models: Model[] }>(response, "get_available_models")?.models ?? [];
+	const normalized = query.toLowerCase();
+	const match =
+		models.find((model) => `${model.provider}/${model.id}`.toLowerCase() === normalized) ??
+		models.find((model) => model.id.toLowerCase() === normalized) ??
+		models.find(
+			(model) =>
+				model.id.toLowerCase().includes(normalized) ||
+				model.name.toLowerCase().includes(normalized) ||
+				`${model.provider}/${model.id}`.toLowerCase().includes(normalized),
+		);
+	if (!match) {
+		pushToast(`No model matching "${query}"`, "error");
+		return;
+	}
+	const setResponse = await client.command({ type: "set_model", provider: match.provider, modelId: match.id });
+	if (!setResponse.success) {
+		reportFailure(setResponse, "Failed to set model");
+		return;
+	}
+	pushToast(`Model: ${match.name}`, "info");
+	await sync();
+}
+
+async function showSessionInfo(): Promise<void> {
+	const [statsResponse, stateResponse] = await Promise.all([
+		client.command({ type: "get_session_stats" }),
+		client.command({ type: "get_state" }),
+	]);
+	const sessionStats = dataAs<SessionStats>(statsResponse, "get_session_stats");
+	const state = dataAs<RpcSessionState>(stateResponse, "get_state");
+	if (!sessionStats || !state) {
+		pushToast("Failed to load session info", "error");
+		return;
+	}
+	const lines = [
+		state.sessionName ? `**${state.sessionName}**` : undefined,
+		`Session: \`${sessionStats.sessionId}\``,
+		sessionStats.sessionFile ? `File: \`${sessionStats.sessionFile}\`` : undefined,
+		state.model ? `Model: ${state.model.name} · thinking ${state.thinkingLevel}` : undefined,
+		`Messages: ${sessionStats.totalMessages} (${sessionStats.userMessages} user, ${sessionStats.assistantMessages} assistant, ${sessionStats.toolCalls} tool calls)`,
+		`Tokens: ${formatTokenCount(sessionStats.tokens.total)} total (${formatTokenCount(sessionStats.tokens.input)} in, ${formatTokenCount(sessionStats.tokens.output)} out, ${formatTokenCount(sessionStats.tokens.cacheRead)} cache read)`,
+		`Cost: $${sessionStats.cost.toFixed(4)}`,
+		sessionStats.contextUsage?.percent !== null && sessionStats.contextUsage?.percent !== undefined
+			? `Context: ${sessionStats.contextUsage.percent}% of ${formatTokenCount(sessionStats.contextUsage.contextWindow)}`
+			: undefined,
+	].filter((line): line is string => line !== undefined);
+	commandResult.value = { title: "Session", markdown: lines.join("\n\n") };
+}
+
+async function forkFromEntry(entryId: string): Promise<void> {
+	const response = await client.command({ type: "fork", entryId });
+	if (!response.success) {
+		reportFailure(response, "Fork failed");
+		return;
+	}
+	const result = dataAs<{ text?: string; cancelled: boolean }>(response, "fork");
+	if (result?.text) {
+		// Like the TUI: the forked message text goes into the editor for editing
+		editorText.value = result.text;
+	}
+	pushToast("Forked to new session", "info");
+	await sync();
+}
+
+export async function selectForkEntry(entryId: string): Promise<void> {
+	forkPickerOpen.value = false;
+	await forkFromEntry(entryId);
+}
+
+export async function selectModel(provider: string, modelId: string): Promise<void> {
+	modelPickerOpen.value = false;
+	const response = await client.command({ type: "set_model", provider, modelId });
+	if (!response.success) {
+		reportFailure(response, "Failed to set model");
+		return;
+	}
+	await sync();
+}
+
+/**
+ * Execute a builtin slash command (/compact, /new, /model, ...). Returns true
+ * when the command was handled here; false when it should go through `prompt`
+ * (extension/prompt/skill commands).
+ */
+export async function executeBuiltinCommand(text: string): Promise<boolean> {
+	const spaceIndex = text.indexOf(" ");
+	const name = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+	const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+
+	switch (name) {
+		case "compact": {
+			const response = await client.command({ type: "compact", ...(args ? { customInstructions: args } : {}) });
+			reportFailure(response, "Compaction failed");
+			return true;
+		}
+		case "new": {
+			const response = await client.command({ type: "new_session" });
+			if (!response.success) {
+				reportFailure(response, "Failed to start new session");
+				return true;
+			}
+			await sync();
+			return true;
+		}
+		case "name": {
+			if (!args) {
+				pushToast("Usage: /name <session name>", "error");
+				return true;
+			}
+			const response = await client.command({ type: "set_session_name", name: args });
+			reportFailure(response, "Failed to set session name");
+			return true;
+		}
+		case "model": {
+			if (args) {
+				await setModelByQuery(args);
+			} else {
+				modelPickerOpen.value = true;
+			}
+			return true;
+		}
+		case "session": {
+			await showSessionInfo();
+			return true;
+		}
+		case "export": {
+			const response = await client.command({ type: "export_html", ...(args ? { outputPath: args } : {}) });
+			if (!response.success) {
+				reportFailure(response, "Export failed");
+				return true;
+			}
+			const exported = dataAs<{ path: string }>(response, "export_html");
+			pushToast(`Exported to ${exported?.path ?? "session HTML"} (on the server)`, "info");
+			return true;
+		}
+		case "copy": {
+			const response = await client.command({ type: "get_last_assistant_text" });
+			const result = dataAs<{ text: string | undefined }>(response, "get_last_assistant_text");
+			if (!result?.text) {
+				pushToast("No agent message to copy", "error");
+				return true;
+			}
+			try {
+				await navigator.clipboard.writeText(result.text);
+				pushToast("Copied last agent message", "info");
+			} catch {
+				pushToast("Clipboard unavailable (requires https or localhost)", "error");
+			}
+			return true;
+		}
+		case "fork": {
+			forkPickerOpen.value = true;
+			return true;
+		}
+		case "clone": {
+			const response = await client.command({ type: "clone" });
+			if (!response.success) {
+				reportFailure(response, "Clone failed");
+				return true;
+			}
+			pushToast("Cloned session", "info");
+			await sync();
+			return true;
+		}
+		default:
+			return false;
+	}
 }

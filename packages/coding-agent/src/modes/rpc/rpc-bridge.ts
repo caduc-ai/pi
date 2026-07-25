@@ -20,14 +20,15 @@ import type {
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
-import type {
-	RpcCommand,
-	RpcExtensionUICancel,
-	RpcExtensionUIRequest,
-	RpcExtensionUIResponse,
-	RpcResponse,
-	RpcSessionState,
-	RpcSlashCommand,
+import {
+	RPC_BUILTIN_COMMANDS,
+	type RpcCommand,
+	type RpcExtensionUICancel,
+	type RpcExtensionUIRequest,
+	type RpcExtensionUIResponse,
+	type RpcResponse,
+	type RpcSessionState,
+	type RpcSlashCommand,
 } from "./rpc-types.ts";
 
 export interface RpcClientConnection {
@@ -765,6 +766,10 @@ export class RpcBridge {
 						source: "skill",
 						sourceInfo: skill.sourceInfo,
 					});
+				}
+
+				for (const builtin of RPC_BUILTIN_COMMANDS) {
+					commands.push({ ...builtin, source: "builtin" });
 				}
 
 				return success(id, "get_commands", { commands });

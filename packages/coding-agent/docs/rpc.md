@@ -823,6 +823,26 @@ Each command has:
   - `"extension"`: Registered via `pi.registerCommand()` in an extension
   - `"prompt"`: Loaded from a prompt template `.md` file
   - `"skill"`: Loaded from a skill directory (name is prefixed with `skill:`)
+  - `"builtin"`: Built-in session command (see below)
+- `argumentHint`: Optional argument hint for autocomplete (builtin commands)
+
+Commands with source `extension`, `prompt`, or `skill` are invoked via the `prompt` command (message `/name args`).
+
+Commands with source `builtin` are NOT invoked via `prompt`; each maps to RPC command verbs:
+
+| Command | RPC mapping |
+| --- | --- |
+| `/compact` | `compact` |
+| `/new` | `new_session` |
+| `/name <name>` | `set_session_name` |
+| `/model [provider/model]` | `get_available_models` + `set_model` |
+| `/session` | `get_session_stats` |
+| `/export [path]` | `export_html` |
+| `/copy` | `get_last_assistant_text` |
+| `/fork` | `get_fork_messages` + `fork` |
+| `/clone` | `clone` |
+
+After state-changing builtin commands (`new`, `fork`, `clone`, `model`), clients should re-sync with `get_state` and `get_messages`.
 - `location`: Where it was loaded from (optional, not present for extensions):
   - `"user"`: User-level (`~/.pi/agent/`)
   - `"project"`: Project-level (`./.pi/agent/`)

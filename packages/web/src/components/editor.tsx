@@ -3,9 +3,11 @@ import { useRef } from "preact/hooks";
 import type { ImageContent } from "../protocol.ts";
 import {
 	editorText,
+	executeBuiltinCommand,
 	pushToast,
 	queue,
 	sendAbort,
+	sendBash,
 	sendPrompt,
 	sessionState,
 	slashCommands,
@@ -62,6 +64,13 @@ async function send(): Promise<void> {
 	pendingImages.value = [];
 	autocompleteDismissed.value = false;
 	try {
+		if (text.startsWith("!")) {
+			await sendBash(text.slice(1));
+			return;
+		}
+		if (text.startsWith("/") && (await executeBuiltinCommand(text))) {
+			return;
+		}
 		await sendPrompt(text, images);
 	} catch (error) {
 		pushToast(error instanceof Error ? error.message : String(error), "error");

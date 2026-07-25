@@ -2,7 +2,9 @@ import { ChatList } from "./components/chat-list.tsx";
 import { DialogHost, ToastHost } from "./components/dialogs.tsx";
 import { Editor } from "./components/editor.tsx";
 import { Footer } from "./components/footer.tsx";
-import { connected, sessionState, widgets } from "./state.ts";
+import { MarkdownView } from "./components/markdown-view.tsx";
+import { ForkPicker, ModelPicker } from "./components/pickers.tsx";
+import { commandResult, connected, sessionState, widgets } from "./state.ts";
 
 function Header() {
 	const name = sessionState.value?.sessionName;
@@ -32,17 +34,43 @@ function WidgetArea({ placement }: { placement: "aboveEditor" | "belowEditor" })
 	);
 }
 
+function CommandResultCard() {
+	const result = commandResult.value;
+	if (!result) return null;
+	return (
+		<div class="command-result">
+			<div class="command-result-header">
+				<span class="command-result-title">{result.title}</span>
+				<button
+					type="button"
+					class="command-result-close"
+					title="Dismiss"
+					onClick={() => {
+						commandResult.value = undefined;
+					}}
+				>
+					×
+				</button>
+			</div>
+			<MarkdownView text={result.markdown} />
+		</div>
+	);
+}
+
 export function App() {
 	return (
 		<div class="app">
 			<Header />
 			<ChatList />
+			<CommandResultCard />
 			<WidgetArea placement="aboveEditor" />
 			<Editor />
 			<WidgetArea placement="belowEditor" />
 			<Footer />
 			<DialogHost />
 			<ToastHost />
+			<ModelPicker />
+			<ForkPicker />
 		</div>
 	);
 }

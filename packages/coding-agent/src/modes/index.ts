@@ -16,3 +16,4 @@ export type {
 	RpcSessionState,
 	RpcSlashCommand,
 } from "./rpc/rpc-types.ts";
+export { RPC_BUILTIN_COMMANDS } from "./rpc/rpc-types.ts";

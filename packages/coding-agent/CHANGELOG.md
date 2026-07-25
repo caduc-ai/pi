@@ -8,6 +8,7 @@
 - Added `/web [off|<host>]` command to share a live interactive session to the pi web UI mid-flight, displaying a URL and QR code. Extension dialogs are multiplexed between the TUI and all connected web clients (first response wins); notifications, statuses, widgets, and titles are forwarded to web clients.
 - Added read-only session viewer: `pi --web --view <session.jsonl>` serves a recorded session file to the web UI without an agent process (no model or auth required).
 - Added a `/themes` endpoint to web mode listing available themes (built-in, custom, and registered), served like the TUI resolves them.
+- Added builtin slash commands to the RPC protocol: `get_commands` now also returns `/compact`, `/new`, `/name`, `/model`, `/session`, `/export`, `/copy`, `/fork`, and `/clone` with source `"builtin"`, mapped to RPC command verbs (see [rpc.md](docs/rpc.md#get_commands)).
 
 ## [0.82.1] - 2026-07-25
 
