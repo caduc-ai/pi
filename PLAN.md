@@ -93,12 +93,22 @@ Key seams:
       responses
 - [ ] Publish dry-run of pi-web on next release (first-time publish of the package)
 
-### Phase 3 — share a live TUI session
+### Phase 3 — share a live TUI session (DONE)
 
-- [ ] UI multiplexer for extension dialogs (TUI + web, first-response-wins,
-      "resolved elsewhere" for losers)
-- [ ] `/web` slash command in interactive mode: start/stop sharing the current
-      session, show URL + QR code
+- [x] `RpcBridge` no-bind mode (`bindExtensions: false`) + `offerDialog`/
+      `dismissDialog`/`broadcastUiRequest` API; `WebShare` class
+      (`src/web/web-share.ts`) wraps bridge + server + per-share token
+- [x] UI multiplexer in interactive mode: select/confirm/input/editor race TUI
+      vs web clients (first response wins, TUI dialog dismissed on web answer,
+      `extension_ui_cancel` on TUI answer); notify/setStatus/setWidget/setTitle/
+      set_editor_text forwarded to web clients; TUI keeps owning the UI context
+- [x] `/web [off|<host>]` command: start/stop sharing, reprints info when
+      already running, shows URL + QR (qrcode-generator, truecolor half-blocks,
+      LAN IP substituted when bound to wildcard), stops on TUI shutdown,
+      re-subscribes on session replace (new/switch/fork)
+- [x] Verified in tmux: /web shows URL+QR, web client get_state/prompt streams
+      into TUI, dialog race both directions (TUI dialog dismissed on web win,
+      cancel on TUI win), /web off + restart with fresh token/port
 
 ### Phase 4 — polish
 

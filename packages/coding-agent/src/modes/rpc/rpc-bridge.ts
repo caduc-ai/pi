@@ -49,6 +49,15 @@ export interface RpcBridgeCallbacks {
 	onShutdownRequested?(): void;
 }
 
+export interface RpcBridgeOptions {
+	/**
+	 * Bind extensions with the RPC UI context (default true). Set false when
+	 * another frontend (e.g. the TUI) owns the extension UI context; dialogs
+	 * can then still be offered to RPC clients via offerDialog().
+	 */
+	bindExtensions?: boolean;
+}
+
 function success<T extends RpcCommand["type"]>(id: string | undefined, command: T, data?: object | null): RpcResponse {
 	if (data === undefined) {
 		return { id, type: "response", command, success: true } as RpcResponse;
@@ -72,16 +81,25 @@ export class RpcBridge {
 	private unsubscribe: (() => void) | undefined;
 	private unsubscribeBackpressure: (() => void) | undefined;
 
-	constructor(runtimeHost: AgentSessionRuntime, callbacks: RpcBridgeCallbacks = {}) {
+	private readonly options: RpcBridgeOptions;
+
+	constructor(runtimeHost: AgentSessionRuntime, callbacks: RpcBridgeCallbacks = {}, options: RpcBridgeOptions = {}) {
 		this.runtimeHost = runtimeHost;
 		this.callbacks = callbacks;
+		this.options = options;
 		this.session = runtimeHost.session;
 	}
 
+	get clientCount(): number {
+		return this.clients.size;
+	}
+
 	async start(): Promise<void> {
-		this.runtimeHost.setRebindSession(async () => {
-			await this.rebindSession();
-		});
+		if (this.options.bindExtensions !== false) {
+			this.runtimeHost.setRebindSession(async () => {
+				await this.rebindSession();
+			});
+		}
 		await this.rebindSession();
 	}
 
@@ -354,9 +372,13 @@ export class RpcBridge {
 		};
 	}
 
-	private async rebindSession(): Promise<void> {
+	async rebindSession(): Promise<void> {
 		this.session = this.runtimeHost.session;
 		const session = this.session;
+		if (this.options.bindExtensions === false) {
+			this.resubscribe(session);
+			return;
+		}
 		await session.bindExtensions({
 			uiContext: this.createExtensionUIContext(),
 			mode: "rpc",
@@ -396,6 +418,10 @@ export class RpcBridge {
 			},
 		});
 
+		this.resubscribe(session);
+	}
+
+	private resubscribe(session: AgentSessionRuntime["session"]): void {
 		this.unsubscribe?.();
 		this.unsubscribeBackpressure?.();
 		this.unsubscribe = session.subscribe((event) => {
@@ -408,6 +434,29 @@ export class RpcBridge {
 			}
 			await Promise.all(drains);
 		});
+	}
+
+	/**
+	 * Offer a dialog to all attached clients. First response wins; other clients
+	 * are cancelled automatically by the response path. Used when the extension
+	 * UI context is owned elsewhere (e.g. the TUI) and dialogs are multiplexed.
+	 */
+	offerDialog(request: Record<string, unknown>, onResponse: (response: RpcExtensionUIResponse) => void): string {
+		const id = crypto.randomUUID();
+		this.pendingExtensionRequests.set(id, { resolve: onResponse, reject: () => {} });
+		this.broadcast({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
+		return id;
+	}
+
+	/** Dismiss a dialog previously offered via offerDialog on all clients (e.g. answered locally). */
+	dismissDialog(id: string): void {
+		this.pendingExtensionRequests.delete(id);
+		this.broadcastCancel(id);
+	}
+
+	/** Broadcast a fire-and-forget extension UI request (notify, setStatus, setWidget, ...). */
+	broadcastUiRequest(request: Record<string, unknown>): void {
+		this.broadcast({ type: "extension_ui_request", id: crypto.randomUUID(), ...request } as RpcExtensionUIRequest);
 	}
 
 	private async handleCommand(command: RpcCommand, client: RpcClientConnection): Promise<RpcResponse | undefined> {

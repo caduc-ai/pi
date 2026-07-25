@@ -98,9 +98,12 @@ import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipb
 import { parseGitUrl } from "../../utils/git.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
+import { renderQrCodeLines } from "../../utils/qr.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
+import { WebShare } from "../../web/web-share.ts";
+import type { RpcExtensionUIResponse } from "../rpc/rpc-types.ts";
 import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
@@ -408,6 +411,12 @@ export class InteractiveMode {
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
+	// Cancel callback of the currently shown extension dialog, for dismissing it
+	// when a web client answers first while web sharing is active.
+	private activeExtensionDialogCancel: (() => void) | undefined = undefined;
+
+	// Web sharing state (see /web command)
+	private webShare: WebShare | undefined = undefined;
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -1744,6 +1753,7 @@ export class InteractiveMode {
 		await this.updateAvailableProviderCount();
 		this.updateEditorBorderColor();
 		this.updateTerminalTitle();
+		await this.webShare?.rebindSession();
 	}
 
 	private async handleFatalRuntimeError(prefix: string, error: unknown): Promise<never> {
@@ -2139,12 +2149,33 @@ export class InteractiveMode {
 
 	private createExtensionUIContext(): ExtensionUIContext {
 		return {
-			select: (title, options, opts) => this.showExtensionSelector(title, options, opts),
-			confirm: (title, message, opts) => this.showExtensionConfirm(title, message, opts),
-			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
-			notify: (message, type) => this.showExtensionNotify(message, type),
+			select: (title, options, opts) =>
+				this.raceDialogWithWeb(
+					() => this.showExtensionSelector(title, options, opts),
+					{ method: "select", title, options, timeout: opts?.timeout },
+					(r) => ("cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined),
+				),
+			confirm: (title, message, opts) =>
+				this.raceDialogWithWeb(
+					() => this.showExtensionConfirm(title, message, opts),
+					{ method: "confirm", title, message, timeout: opts?.timeout },
+					(r) => ("cancelled" in r && r.cancelled ? false : "confirmed" in r ? r.confirmed : false),
+				),
+			input: (title, placeholder, opts) =>
+				this.raceDialogWithWeb(
+					() => this.showExtensionInput(title, placeholder, opts),
+					{ method: "input", title, placeholder, timeout: opts?.timeout },
+					(r) => ("cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined),
+				),
+			notify: (message, type) => {
+				this.showExtensionNotify(message, type);
+				this.webShare?.broadcastUiRequest({ method: "notify", message, notifyType: type });
+			},
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
-			setStatus: (key, text) => this.setExtensionStatus(key, text),
+			setStatus: (key, text) => {
+				this.setExtensionStatus(key, text);
+				this.webShare?.broadcastUiRequest({ method: "setStatus", statusKey: key, statusText: text });
+			},
 			setWorkingMessage: (message) => {
 				this.workingMessage = message;
 				if (this.activeStatusIndicator?.kind === "working") {
@@ -2154,15 +2185,37 @@ export class InteractiveMode {
 			setWorkingVisible: (visible) => this.setWorkingVisible(visible),
 			setWorkingIndicator: (options) => this.setWorkingIndicator(options),
 			setHiddenThinkingLabel: (label) => this.setHiddenThinkingLabel(label),
-			setWidget: (key, content, options) => this.setExtensionWidget(key, content, options),
+			setWidget: (key, content, options) => {
+				this.setExtensionWidget(key, content, options);
+				// Only string arrays can be forwarded to web clients
+				if (content === undefined || Array.isArray(content)) {
+					this.webShare?.broadcastUiRequest({
+						method: "setWidget",
+						widgetKey: key,
+						widgetLines: content as string[] | undefined,
+						widgetPlacement: options?.placement,
+					});
+				}
+			},
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
-			setTitle: (title) => this.ui.terminal.setTitle(title),
+			setTitle: (title) => {
+				this.ui.terminal.setTitle(title);
+				this.webShare?.broadcastUiRequest({ method: "setTitle", title });
+			},
 			custom: (factory, options) => this.showExtensionCustom(factory, options),
 			pasteToEditor: (text) => this.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
-			setEditorText: (text) => this.editor.setText(text),
+			setEditorText: (text) => {
+				this.editor.setText(text);
+				this.webShare?.broadcastUiRequest({ method: "set_editor_text", text });
+			},
 			getEditorText: () => this.editor.getExpandedText?.() ?? this.editor.getText(),
-			editor: (title, prefill) => this.showExtensionEditor(title, prefill),
+			editor: (title, prefill) =>
+				this.raceDialogWithWeb(
+					() => this.showExtensionEditor(title, prefill),
+					{ method: "editor", title, prefill },
+					(r) => ("cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined),
+				),
 			addAutocompleteProvider: (factory) => {
 				this.autocompleteProviderWrappers.push(factory);
 				this.setupAutocompleteProvider();
@@ -2192,6 +2245,38 @@ export class InteractiveMode {
 	}
 
 	/**
+	 * Run an extension dialog in the TUI and, while web sharing has connected
+	 * clients, offer it to web clients simultaneously. First response wins: a
+	 * web answer dismisses the TUI dialog, a TUI answer cancels the web dialog.
+	 */
+	private raceDialogWithWeb<T>(
+		startTuiDialog: () => Promise<T>,
+		webRequest: Record<string, unknown>,
+		parseResponse: (response: RpcExtensionUIResponse) => T,
+	): Promise<T> {
+		const web = this.webShare;
+		if (!web || !web.isRunning || web.clientCount === 0) {
+			return startTuiDialog();
+		}
+		return new Promise<T>((resolve) => {
+			let settled = false;
+			const id = web.offerDialog(webRequest, (response) => {
+				if (settled) return;
+				settled = true;
+				// Dismiss the TUI dialog; its promise resolves with the default and is ignored
+				this.activeExtensionDialogCancel?.();
+				resolve(parseResponse(response));
+			});
+			void startTuiDialog().then((value) => {
+				if (settled) return;
+				settled = true;
+				web.dismissDialog(id);
+				resolve(value);
+			});
+		});
+	}
+
+	/**
 	 * Show a selector for extensions.
 	 */
 	private showExtensionSelector(
@@ -2211,6 +2296,12 @@ export class InteractiveMode {
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
+			const onCancel = () => {
+				opts?.signal?.removeEventListener("abort", onAbort);
+				this.hideExtensionSelector();
+				resolve(undefined);
+			};
+
 			this.extensionSelector = new ExtensionSelectorComponent(
 				title,
 				options,
@@ -2219,13 +2310,10 @@ export class InteractiveMode {
 					this.hideExtensionSelector();
 					resolve(option);
 				},
-				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionSelector();
-					resolve(undefined);
-				},
+				onCancel,
 				{ tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() },
 			);
+			this.activeExtensionDialogCancel = onCancel;
 
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionSelector);
@@ -2238,6 +2326,7 @@ export class InteractiveMode {
 	 * Hide the extension selector.
 	 */
 	private hideExtensionSelector(): void {
+		this.activeExtensionDialogCancel = undefined;
 		this.extensionSelector?.dispose();
 		this.editorContainer.clear();
 		this.editorContainer.addChild(this.editor);
@@ -2286,6 +2375,12 @@ export class InteractiveMode {
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
+			const onCancel = () => {
+				opts?.signal?.removeEventListener("abort", onAbort);
+				this.hideExtensionInput();
+				resolve(undefined);
+			};
+
 			this.extensionInput = new ExtensionInputComponent(
 				title,
 				placeholder,
@@ -2294,13 +2389,10 @@ export class InteractiveMode {
 					this.hideExtensionInput();
 					resolve(value);
 				},
-				() => {
-					opts?.signal?.removeEventListener("abort", onAbort);
-					this.hideExtensionInput();
-					resolve(undefined);
-				},
+				onCancel,
 				{ tui: this.ui, timeout: opts?.timeout },
 			);
+			this.activeExtensionDialogCancel = onCancel;
 
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionInput);
@@ -2313,6 +2405,7 @@ export class InteractiveMode {
 	 * Hide the extension input.
 	 */
 	private hideExtensionInput(): void {
+		this.activeExtensionDialogCancel = undefined;
 		this.extensionInput?.dispose();
 		this.editorContainer.clear();
 		this.editorContainer.addChild(this.editor);
@@ -2326,6 +2419,11 @@ export class InteractiveMode {
 	 */
 	private showExtensionEditor(title: string, prefill?: string): Promise<string | undefined> {
 		return new Promise((resolve) => {
+			const onCancel = () => {
+				this.hideExtensionEditor();
+				resolve(undefined);
+			};
+
 			this.extensionEditor = new ExtensionEditorComponent(
 				this.ui,
 				this.keybindings,
@@ -2335,13 +2433,11 @@ export class InteractiveMode {
 					this.hideExtensionEditor();
 					resolve(value);
 				},
-				() => {
-					this.hideExtensionEditor();
-					resolve(undefined);
-				},
+				onCancel,
 				undefined,
 				this.settingsManager.getExternalEditorCommand(),
 			);
+			this.activeExtensionDialogCancel = onCancel;
 
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionEditor);
@@ -2354,6 +2450,7 @@ export class InteractiveMode {
 	 * Hide the extension editor.
 	 */
 	private hideExtensionEditor(): void {
+		this.activeExtensionDialogCancel = undefined;
 		this.editorContainer.clear();
 		this.editorContainer.addChild(this.editor);
 		this.extensionEditor = undefined;
@@ -2675,6 +2772,11 @@ export class InteractiveMode {
 			}
 			if (text === "/share") {
 				await this.handleShareCommand();
+				this.editor.setText("");
+				return;
+			}
+			if (text === "/web" || text.startsWith("/web ")) {
+				await this.handleWebCommand(text);
 				this.editor.setText("");
 				return;
 			}
@@ -3545,6 +3647,7 @@ export class InteractiveMode {
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
+		await this.webShare?.stop();
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -5496,6 +5599,52 @@ export class InteractiveMode {
 			}
 			await this.handleFatalRuntimeError("Failed to import session", error);
 		}
+	}
+
+	private async handleWebCommand(text: string): Promise<void> {
+		const arg = text.slice("/web".length).trim();
+		if (arg === "off") {
+			if (!this.webShare?.isRunning) {
+				this.showStatus("Web sharing is not active");
+				return;
+			}
+			await this.webShare.stop();
+			this.showStatus("Web sharing stopped");
+			return;
+		}
+		if (this.webShare?.isRunning) {
+			this.showWebShareInfo();
+			return;
+		}
+		const host = arg.length > 0 ? arg : "127.0.0.1";
+		this.webShare ??= new WebShare(this.runtimeHost);
+		try {
+			await this.webShare.start({ host });
+		} catch (error: unknown) {
+			this.showError(`Failed to start web sharing: ${error instanceof Error ? error.message : "Unknown error"}`);
+			return;
+		}
+		this.showWebShareInfo();
+	}
+
+	private showWebShareInfo(): void {
+		const url = this.webShare?.url;
+		if (!url) return;
+		const lines = [
+			theme.bold(theme.fg("accent", "Web sharing active")),
+			"",
+			`Open this URL on any device: ${theme.fg("success", url)}`,
+			"",
+			...renderQrCodeLines(url),
+			"",
+			theme.fg("warning", "Anyone with this URL has full control of this session, including answering dialogs."),
+			theme.fg("muted", "Stop with /web off."),
+		];
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new DynamicBorder());
+		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
+		this.chatContainer.addChild(new DynamicBorder());
+		this.ui.requestRender();
 	}
 
 	private async handleShareCommand(): Promise<void> {
