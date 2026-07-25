@@ -525,6 +525,13 @@ body {
 	white-space: nowrap;
 }
 
+.autocomplete-scroll-info {
+	color: var(--pi-dim);
+	font-size: 12px;
+	padding: 3px 10px 5px;
+	text-align: center;
+}
+
 .editor-row {
 	display: flex;
 	gap: 8px;

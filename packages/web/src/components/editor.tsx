@@ -1,6 +1,6 @@
 import { computed, signal } from "@preact/signals";
 import { useRef } from "preact/hooks";
-import type { ImageContent } from "../protocol.ts";
+import type { ImageContent, RpcSlashCommand } from "../protocol.ts";
 import {
 	editorText,
 	executeBuiltinCommand,
@@ -14,26 +14,204 @@ import {
 	workingMessage,
 } from "../state.ts";
 
+const AUTOCOMPLETE_MAX_VISIBLE = 8;
+const TUI_BUILTIN_COMMAND_ORDER = new Map(
+	[
+		"settings",
+		"model",
+		"scoped-models",
+		"export",
+		"import",
+		"share",
+		"web",
+		"copy",
+		"name",
+		"session",
+		"changelog",
+		"hotkeys",
+		"fork",
+		"clone",
+		"tree",
+		"trust",
+		"login",
+		"logout",
+		"new",
+		"compact",
+		"resume",
+		"reload",
+		"quit",
+	].map((name, index): [string, number] => [name, index]),
+);
+const TUI_SOURCE_ORDER = {
+	builtin: 0,
+	prompt: 1,
+	extension: 2,
+	skill: 3,
+} satisfies Record<RpcSlashCommand["source"], number>;
+
 const pendingImages = signal<ImageContent[]>([]);
 const autocompleteIndex = signal(0);
 const autocompleteDismissed = signal(false);
 const sending = signal(false);
+
+function fuzzyMatch(query: string, text: string): { matches: boolean; score: number } {
+	const queryLower = query.toLowerCase();
+	const textLower = text.toLowerCase();
+
+	const matchQuery = (normalizedQuery: string): { matches: boolean; score: number } => {
+		if (normalizedQuery.length === 0) {
+			return { matches: true, score: 0 };
+		}
+		if (normalizedQuery.length > textLower.length) {
+			return { matches: false, score: 0 };
+		}
+
+		let queryIndex = 0;
+		let score = 0;
+		let lastMatchIndex = -1;
+		let consecutiveMatches = 0;
+
+		for (let i = 0; i < textLower.length && queryIndex < normalizedQuery.length; i += 1) {
+			if (textLower[i] === normalizedQuery[queryIndex]) {
+				const isWordBoundary = i === 0 || /[\s_./:-]/.test(textLower[i - 1] ?? "");
+				if (lastMatchIndex === i - 1) {
+					consecutiveMatches += 1;
+					score -= consecutiveMatches * 5;
+				} else {
+					consecutiveMatches = 0;
+					if (lastMatchIndex >= 0) {
+						score += (i - lastMatchIndex - 1) * 2;
+					}
+				}
+				if (isWordBoundary) {
+					score -= 10;
+				}
+				score += i * 0.1;
+				lastMatchIndex = i;
+				queryIndex += 1;
+			}
+		}
+
+		if (queryIndex < normalizedQuery.length) {
+			return { matches: false, score: 0 };
+		}
+		if (normalizedQuery === textLower) {
+			score -= 100;
+		}
+		return { matches: true, score };
+	};
+
+	const primaryMatch = matchQuery(queryLower);
+	if (primaryMatch.matches) {
+		return primaryMatch;
+	}
+
+	const alphaNumericMatch = /^(?<letters>[a-z]+)(?<digits>[0-9]+)$/.exec(queryLower);
+	const numericAlphaMatch = /^(?<digits>[0-9]+)(?<letters>[a-z]+)$/.exec(queryLower);
+	const swappedQuery = alphaNumericMatch
+		? `${alphaNumericMatch.groups?.digits ?? ""}${alphaNumericMatch.groups?.letters ?? ""}`
+		: numericAlphaMatch
+			? `${numericAlphaMatch.groups?.letters ?? ""}${numericAlphaMatch.groups?.digits ?? ""}`
+			: "";
+	if (!swappedQuery) {
+		return primaryMatch;
+	}
+
+	const swappedMatch = matchQuery(swappedQuery);
+	return swappedMatch.matches ? { matches: true, score: swappedMatch.score + 5 } : primaryMatch;
+}
+
+function fuzzyFilter<T>(items: T[], query: string, getText: (item: T) => string): T[] {
+	const tokens = query
+		.trim()
+		.split(/[\s/]+/)
+		.filter((token) => token.length > 0);
+	if (tokens.length === 0) {
+		return items;
+	}
+
+	const results: Array<{ item: T; totalScore: number }> = [];
+	for (const item of items) {
+		let totalScore = 0;
+		let allMatch = true;
+		for (const token of tokens) {
+			const match = fuzzyMatch(token, getText(item));
+			if (!match.matches) {
+				allMatch = false;
+				break;
+			}
+			totalScore += match.score;
+		}
+		if (allMatch) {
+			results.push({ item, totalScore });
+		}
+	}
+
+	results.sort((a, b) => a.totalScore - b.totalScore);
+	return results.map((result) => result.item);
+}
+
+function getCommandSortIndex(command: RpcSlashCommand): number {
+	if (command.source !== "builtin") {
+		return 0;
+	}
+	return TUI_BUILTIN_COMMAND_ORDER.get(command.name) ?? TUI_BUILTIN_COMMAND_ORDER.size;
+}
+
+function sortCommandsLikeTui(commands: RpcSlashCommand[]): RpcSlashCommand[] {
+	return commands
+		.map((command, index) => ({ command, index }))
+		.sort((a, b) => {
+			const sourceDelta = TUI_SOURCE_ORDER[a.command.source] - TUI_SOURCE_ORDER[b.command.source];
+			if (sourceDelta !== 0) {
+				return sourceDelta;
+			}
+			const commandDelta = getCommandSortIndex(a.command) - getCommandSortIndex(b.command);
+			return commandDelta !== 0 ? commandDelta : a.index - b.index;
+		})
+		.map((entry) => entry.command);
+}
+
+function formatAutocompleteDescription(command: RpcSlashCommand): string | undefined {
+	if (!command.argumentHint) {
+		return command.description;
+	}
+	return command.description ? `${command.argumentHint} — ${command.description}` : command.argumentHint;
+}
 
 const autocompleteQuery = computed(() => {
 	const text = editorText.value;
 	if (!text.startsWith("/") || text.includes(" ") || autocompleteDismissed.value) {
 		return undefined;
 	}
-	return text.slice(1).toLowerCase();
+	return text.slice(1);
 });
 
 const autocompleteMatches = computed(() => {
 	const query = autocompleteQuery.value;
 	if (query === undefined) return [];
-	return slashCommands.value.filter((command) => command.name.toLowerCase().startsWith(query)).slice(0, 8);
+	return fuzzyFilter(sortCommandsLikeTui(slashCommands.value), query, (command) => command.name);
 });
 
 const autocompleteOpen = computed(() => autocompleteMatches.value.length > 0);
+
+function getSelectedAutocompleteIndex(matches: RpcSlashCommand[]): number {
+	return matches.length === 0 ? -1 : Math.min(autocompleteIndex.value, matches.length - 1);
+}
+
+const visibleAutocompleteMatches = computed(() => {
+	const matches = autocompleteMatches.value;
+	const selectedIndex = getSelectedAutocompleteIndex(matches);
+	if (selectedIndex === -1) return [];
+	const startIndex = Math.max(
+		0,
+		Math.min(selectedIndex - Math.floor(AUTOCOMPLETE_MAX_VISIBLE / 2), matches.length - AUTOCOMPLETE_MAX_VISIBLE),
+	);
+	return matches.slice(startIndex, startIndex + AUTOCOMPLETE_MAX_VISIBLE).map((command, offset) => ({
+		command,
+		index: startIndex + offset,
+	}));
+});
 
 const isBusy = computed(() => sessionState.value?.isStreaming === true || workingMessage.value !== undefined);
 
@@ -92,19 +270,20 @@ export function Editor() {
 	const handleKeyDown = (event: KeyboardEvent) => {
 		if (autocompleteOpen.value) {
 			const matches = autocompleteMatches.value;
+			const selectedIndex = getSelectedAutocompleteIndex(matches);
 			if (event.key === "ArrowDown") {
 				event.preventDefault();
-				autocompleteIndex.value = (autocompleteIndex.value + 1) % matches.length;
+				autocompleteIndex.value = (selectedIndex + 1) % matches.length;
 				return;
 			}
 			if (event.key === "ArrowUp") {
 				event.preventDefault();
-				autocompleteIndex.value = (autocompleteIndex.value - 1 + matches.length) % matches.length;
+				autocompleteIndex.value = (selectedIndex - 1 + matches.length) % matches.length;
 				return;
 			}
 			if (event.key === "Tab" || event.key === "Enter") {
 				event.preventDefault();
-				const selected = matches[Math.min(autocompleteIndex.value, matches.length - 1)];
+				const selected = matches[selectedIndex];
 				if (selected) {
 					editorText.value = `/${selected.name} `;
 					autocompleteDismissed.value = true;
@@ -175,11 +354,11 @@ export function Editor() {
 			)}
 			{autocompleteOpen.value && (
 				<div class="autocomplete">
-					{autocompleteMatches.value.map((command, index) => (
+					{visibleAutocompleteMatches.value.map(({ command, index }) => (
 						<button
-							key={command.name}
+							key={`${command.source}:${command.name}`}
 							type="button"
-							class={`autocomplete-entry ${index === autocompleteIndex.value ? "selected" : ""}`}
+							class={`autocomplete-entry ${index === getSelectedAutocompleteIndex(autocompleteMatches.value) ? "selected" : ""}`}
 							onMouseDown={(event) => {
 								event.preventDefault();
 								editorText.value = `/${command.name} `;
@@ -188,9 +367,16 @@ export function Editor() {
 							}}
 						>
 							<span class="autocomplete-name">/{command.name}</span>
-							{command.description && <span class="autocomplete-description">{command.description}</span>}
+							{formatAutocompleteDescription(command) && (
+								<span class="autocomplete-description">{formatAutocompleteDescription(command)}</span>
+							)}
 						</button>
 					))}
+					{autocompleteMatches.value.length > AUTOCOMPLETE_MAX_VISIBLE && (
+						<div class="autocomplete-scroll-info">
+							({getSelectedAutocompleteIndex(autocompleteMatches.value) + 1}/{autocompleteMatches.value.length})
+						</div>
+					)}
 				</div>
 			)}
 			<div class="editor-row">
