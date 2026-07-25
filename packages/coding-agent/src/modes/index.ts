@@ -12,4 +12,5 @@ export type {
 	RpcExtensionUIResponse,
 	RpcResponse,
 	RpcSessionState,
+	RpcSlashCommand,
 } from "./rpc/rpc-types.ts";
