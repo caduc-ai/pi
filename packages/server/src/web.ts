@@ -252,17 +252,18 @@ ${items}
 					var name = s.name || s.firstMessage || s.id.slice(0, 8);
 					var date = new Date(s.modified).toLocaleDateString();
 					return '<div class="past-item">' +
-						'<span>' + esc(name) + ' <span class="meta">' + s.messageCount + ' msgs \u00b7 ' + date + '</span></span>' +
-						'<button onclick="resumeSession(&apos;" + esc(s.path) + "&apos;, &apos;" + esc(s.cwd || cwd) + "&apos;, &apos;" + esc(name) + "&apos;)">Resume</button>' +
-						'</div>';
-				}).join("");
-			} catch (_err) {
-				list.innerHTML = '<span class="meta error">Failed to load</span>';
+					'<span>' + esc(name) + ' <span class="meta">' + s.messageCount + ' msgs \u00b7 ' + date + '</span></span>' +
+					'<button data-session-path="' + esc(s.path) + '" data-session-cwd="' + esc(s.cwd || cwd) + '" data-session-name="' + esc(name) + '" onclick="resumeClick(this)">Resume</button>' +
+					'</div>';n class="meta error">Failed to load</span>';
 			}
 		}
 		cwdInput.addEventListener("change", refresh);
 		cwdInput.addEventListener("blur", refresh);
 		refresh();
+	}
+
+	function resumeClick(btn) {
+		resumeSession(btn.getAttribute("data-session-path"), btn.getAttribute("data-session-cwd"), btn.getAttribute("data-session-name"));
 	}
 
 	async function resumeSession(path, cwd, name) {
@@ -539,26 +540,27 @@ function renderTerminalPage(): string {
 	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 	<title>pi terminal</title>
 	<style>
-		*, *::before, *::after box-sizing: border-box; 
-		body font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 0; display: flex; flex-direction: column; height: 100vh; height: 100dvh; 
-		header padding: 10px 14px; border-bottom: 1px solid #2a2a2a; font-size: 13px; color: #999; display: flex; gap: 6px; align-items: center; flex-shrink: 0; 
-		header a color: #8abeb7; text-decoration: none; font-weight: 500; 
-		header a:hover color: #a0d8cf; 
-		header .sep color: #555; 
-		header .home-btn display: inline-flex; align-items: center; padding: 6px 6px; border-radius: 4px; color: #999; 
-		header .home-btn:hover color: #e6e6e6; background: #1a1a1a; 
-		header .cwd-wrap flex: 1; text-align: right; 
-		header input font-family: inherit; font-size: 13px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 6px 8px; border-radius: 4px; width: 160px; 
-		#output flex: 1; overflow-y: auto; padding: 12px; font-size: 0.85em; line-height: 1.5; white-space: pre-wrap; word-break: break-all; 
-		#input-line display: flex; border-top: 1px solid #2a2a2a; flex-shrink: 0; 
-		#input-line span padding: 12px 10px 12px 14px; color: #60c060; font-size: 15px; user-select: none; 
-		#input-line input flex: 1; font-family: inherit; font-size: 15px; background: transparent; color: #e6e6e6; border: none; padding: 12px 0; outline: none; 
-		.dim color: #666; 
-		.err color: #e06060; 
-		@media (max-width: 600px) 
-			header padding: 8px 10px; 
-			header input width: 120px; font-size: 12px; 
-			#output padding: 8px; font-size: 0.8em; 
+		*, *::before, *::after { box-sizing: border-box; }
+		body { font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 0; display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+		header { padding: 10px 14px; border-bottom: 1px solid #2a2a2a; font-size: 13px; color: #999; display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+		header a { color: #8abeb7; text-decoration: none; font-weight: 500; }
+		header a:hover { color: #a0d8cf; }
+		header .sep { color: #555; }
+		header .home-btn { display: inline-flex; align-items: center; padding: 6px 6px; border-radius: 4px; color: #999; }
+		header .home-btn:hover { color: #e6e6e6; background: #1a1a1a; }
+		header .cwd-wrap { flex: 1; text-align: right; }
+		header input { font-family: inherit; font-size: 13px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 6px 8px; border-radius: 4px; width: 160px; }
+		#output { flex: 1; overflow-y: auto; padding: 12px; font-size: 0.85em; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+		#input-line { display: flex; border-top: 1px solid #2a2a2a; flex-shrink: 0; }
+		#input-line span { padding: 12px 10px 12px 14px; color: #60c060; font-size: 15px; user-select: none; }
+		#input-line input { flex: 1; font-family: inherit; font-size: 15px; background: transparent; color: #e6e6e6; border: none; padding: 12px 0; outline: none; }
+		.dim { color: #666; }
+		.err { color: #e06060; }
+		@media (max-width: 600px) {
+			header { padding: 8px 10px; }
+			header input { width: 120px; font-size: 12px; }
+			#output { padding: 8px; font-size: 0.8em; }
+		}
 	</style>
 </head>
 <body>
