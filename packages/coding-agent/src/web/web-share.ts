@@ -97,8 +97,7 @@ export class WebShare {
 			this.registration = reg;
 
 			if (reg.webPort !== undefined) {
-				const tokenParam = reg.token ? `?token=${reg.token}` : "";
-				this.url_ = `http://${displayHost}:${reg.webPort}/i/${reg.instanceId}/${tokenParam}`;
+				this.url_ = `http://${displayHost}:${reg.webPort}/i/${reg.instanceId}/`;
 			}
 		} catch (error) {
 			await this.bridge?.dispose();

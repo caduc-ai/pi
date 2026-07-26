@@ -1,14 +1,8 @@
 /**
  * Web server for pi web mode: serves the pi-web static assets over HTTP and the
  * pi RPC protocol (docs/rpc.md) over a WebSocket endpoint, backed by RpcBridge.
- *
- * Auth: a per-run random token. Visiting `/?token=<token>` sets an HttpOnly
- * cookie and redirects to `/`. All other HTTP requests and the WebSocket upgrade
- * require the cookie. TLS termination and network exposure are left to external
- * tooling (e.g. tailscale serve, Caddy).
  */
 
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
@@ -22,7 +16,6 @@ export interface WebBridge {
 	attachClient(connection: RpcClientConnection): RpcClientHandle;
 }
 
-const COOKIE_NAME = "pi_web_token";
 const WS_HIGH_WATER_BYTES = 16 * 1024 * 1024;
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -45,7 +38,6 @@ export interface WebServerOptions {
 	bridge: WebBridge;
 	host: string;
 	port: number;
-	token: string;
 	/** Static asset directory. Defaults to the @earendil-works/pi-web dist. */
 	staticDir?: string;
 }
@@ -54,26 +46,6 @@ export interface WebServerHandle {
 	host: string;
 	port: number;
 	close(): Promise<void>;
-}
-
-function tokenMatches(provided: string | undefined, token: string): boolean {
-	if (!provided) return false;
-	const providedBuffer = Buffer.from(provided);
-	const tokenBuffer = Buffer.from(token);
-	return providedBuffer.length === tokenBuffer.length && crypto.timingSafeEqual(providedBuffer, tokenBuffer);
-}
-
-function cookieToken(request: http.IncomingMessage): string | undefined {
-	const header = request.headers.cookie;
-	if (!header) return undefined;
-	for (const part of header.split(";")) {
-		const eqIndex = part.indexOf("=");
-		if (eqIndex === -1) continue;
-		if (part.slice(0, eqIndex).trim() === COOKIE_NAME) {
-			return part.slice(eqIndex + 1).trim();
-		}
-	}
-	return undefined;
 }
 
 function waitForSocketDrain(ws: WebSocket): Promise<void> {
@@ -113,7 +85,7 @@ function resolveThemeFile(name: string): string | undefined {
 }
 
 export async function startWebServer(options: WebServerOptions): Promise<WebServerHandle> {
-	const { bridge, host, token } = options;
+	const { bridge, host } = options;
 	const staticDir = options.staticDir ?? getWebDistDir();
 	const indexPath = path.join(staticDir, "index.html");
 	if (!fs.existsSync(indexPath)) {
@@ -124,26 +96,6 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
 	const server = http.createServer((request, response) => {
 		const url = new URL(request.url ?? "/", "http://localhost");
-
-		// Token login: set the auth cookie and redirect to the app
-		if (url.pathname === "/" && url.searchParams.has("token")) {
-			const provided = url.searchParams.get("token") ?? undefined;
-			if (!tokenMatches(provided, token)) {
-				sendText(response, 401, "Invalid token\n");
-				return;
-			}
-			response.writeHead(302, {
-				location: "/",
-				"set-cookie": `${COOKIE_NAME}=${provided}; Path=/; HttpOnly; SameSite=Strict`,
-			});
-			response.end();
-			return;
-		}
-
-		if (!tokenMatches(cookieToken(request), token)) {
-			sendText(response, 401, "Unauthorized\n");
-			return;
-		}
 
 		if (request.method !== "GET" && request.method !== "HEAD") {
 			sendText(response, 405, "Method not allowed\n");
@@ -183,8 +135,8 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 	const wss = new WebSocketServer({ noServer: true });
 	server.on("upgrade", (request, socket, head) => {
 		const url = new URL(request.url ?? "/", "http://localhost");
-		if (url.pathname !== "/ws" || !tokenMatches(cookieToken(request), token)) {
-			socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+		if (url.pathname !== "/ws") {
+			socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
 			socket.destroy();
 			return;
 		}

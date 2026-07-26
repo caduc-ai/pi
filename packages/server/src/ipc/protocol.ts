@@ -70,7 +70,6 @@ export interface InstanceSummary {
 	sessionFile?: string;
 	radiusPiId?: string;
 	webPort?: number;
-	token?: string;
 }
 
 export interface ResponseBase {

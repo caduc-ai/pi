@@ -91,8 +91,7 @@ export async function runWebMode(runtimeHost: AgentSessionRuntime, options: WebM
 		console.log();
 
 		if (reg.webPort !== undefined) {
-			const tokenParam = reg.token ? `?token=${reg.token}` : "";
-			const url = `http://${displayHost}:${reg.webPort}/i/${reg.instanceId}/${tokenParam}`;
+			const url = `http://${displayHost}:${reg.webPort}/i/${reg.instanceId}/`;
 			console.log(`  ${chalk.cyan(url)}`);
 		} else {
 			console.log(`  Session registered on local server (instance: ${reg.instanceId})`);

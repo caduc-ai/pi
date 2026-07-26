@@ -29,7 +29,7 @@ import type { UiStreamMessage } from "./supervisor.ts";
 import { supervisor } from "./supervisor.ts";
 import type { InstanceRecord } from "./types.ts";
 
-function toInstanceSummary(instance: InstanceRecord, webPort?: number, token?: string): InstanceSummary {
+function toInstanceSummary(instance: InstanceRecord, webPort?: number): InstanceSummary {
 	return {
 		id: instance.id,
 		status: instance.status,
@@ -39,7 +39,6 @@ function toInstanceSummary(instance: InstanceRecord, webPort?: number, token?: s
 		sessionFile: instance.sessionFile,
 		radiusPiId: instance.radiusPiId,
 		webPort,
-		token,
 	};
 }
 
@@ -149,7 +148,6 @@ export async function handleRegisterInstance(
 	socket: Socket,
 	request: RegisterRequest,
 	webPort?: number,
-	token?: string,
 ): Promise<RegisterResponse | ErrorResponse> {
 	try {
 		const instance = await supervisor.registerInstance(socket, {
@@ -161,7 +159,7 @@ export async function handleRegisterInstance(
 		return {
 			type: "register_result",
 			ok: true,
-			instance: toInstanceSummary(instance, webPort, token),
+			instance: toInstanceSummary(instance, webPort),
 		};
 	} catch (error: unknown) {
 		return {

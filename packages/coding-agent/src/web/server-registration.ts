@@ -51,7 +51,6 @@ function spawnServer(webHost?: string, webPort?: number): ReturnType<typeof spaw
 export interface RegistrationResult {
 	instanceId: string;
 	webPort?: number;
-	token?: string;
 	socket: Socket;
 }
 
@@ -61,7 +60,6 @@ interface RegisterResponse {
 	instance?: {
 		id: string;
 		webPort?: number;
-		token?: string;
 	};
 }
 
@@ -143,7 +141,6 @@ function connectAndRegister(options: {
 			resolve({
 				instanceId: response.instance.id,
 				webPort: response.instance.webPort,
-				token: response.instance.token,
 				socket,
 			});
 		});

@@ -8,12 +8,8 @@
  * - GET /i/<id>/              the pi web UI for that instance (SPA)
  * - WS  /i/<id>/ws            RPC protocol stream for that instance
  * - GET /themes, /theme/*     TUI theme files, shared by all instances
- *
- * Auth: a per-run random token. Visiting /?token=<token> sets an HttpOnly
- * cookie; all other HTTP requests and WebSocket upgrades require it.
  */
 
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
@@ -26,8 +22,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { WebSocketServer } from "ws";
 import { supervisor } from "./supervisor.ts";
-
-const COOKIE_NAME = "pi_server_token";
 
 const CONTENT_TYPES: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
@@ -46,33 +40,12 @@ const CONTENT_TYPES: Record<string, string> = {
 export interface ServerWebOptions {
 	host: string;
 	port: number;
-	token: string;
 }
 
 export interface ServerWebHandle {
 	host: string;
 	port: number;
 	close(): Promise<void>;
-}
-
-function tokenMatches(provided: string | undefined, token: string): boolean {
-	if (!provided) return false;
-	const providedBuffer = Buffer.from(provided);
-	const tokenBuffer = Buffer.from(token);
-	return providedBuffer.length === tokenBuffer.length && crypto.timingSafeEqual(providedBuffer, tokenBuffer);
-}
-
-function cookieToken(request: http.IncomingMessage): string | undefined {
-	const header = request.headers.cookie;
-	if (!header) return undefined;
-	for (const part of header.split(";")) {
-		const eqIndex = part.indexOf("=");
-		if (eqIndex === -1) continue;
-		if (part.slice(0, eqIndex).trim() === COOKIE_NAME) {
-			return part.slice(eqIndex + 1).trim();
-		}
-	}
-	return undefined;
 }
 
 function sendText(response: http.ServerResponse, statusCode: number, text: string): void {
@@ -208,7 +181,7 @@ ${items}
 const INSTANCE_PATH_PATTERN = /^\/i\/([0-9a-f-]{36})(\/|$)/;
 
 export async function startServerWeb(options: ServerWebOptions): Promise<ServerWebHandle> {
-	const { host, token } = options;
+	const { host } = options;
 	const staticDir = getWebDistDir();
 	const indexPath = path.join(staticDir, "index.html");
 	if (!fs.existsSync(indexPath)) {
@@ -219,33 +192,6 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 
 	const server = http.createServer((request, response) => {
 		const url = new URL(request.url ?? "/", "http://localhost");
-
-		// Token login: set the auth cookie and redirect
-		if (url.pathname === "/" && url.searchParams.has("token")) {
-			const provided = url.searchParams.get("token") ?? undefined;
-			if (!tokenMatches(provided, token)) {
-				sendText(response, 401, "Invalid token\n");
-				return;
-			}
-			response.writeHead(302, {
-				location: "/",
-				"set-cookie": `${COOKIE_NAME}=${provided}; Path=/; HttpOnly; SameSite=Strict`,
-			});
-			response.end();
-			return;
-		}
-
-		if (!tokenMatches(cookieToken(request), token)) {
-			response.writeHead(401, { "content-type": "text/html; charset=utf-8" });
-			response.end(
-				`<!doctype html><meta charset="utf-8"><title>pi server</title>` +
-					`<body style="font-family:ui-monospace,monospace;background:#0d0d0d;color:#e6e6e6;margin:2em">` +
-					`<h1>pi server</h1>` +
-					`<p>Visit <code style="background:#1a1a1a;padding:0.2em 0.4em;border-radius:3px">/?token=${escapeHtml(token)}</code> to sign in.</p>` +
-					`</body>`,
-			);
-			return;
-		}
 
 		// POST /api/spawn — spawn a new instance from the web dashboard
 		if (request.method === "POST" && url.pathname === "/api/spawn") {
@@ -337,8 +283,8 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 		const instanceMatch = INSTANCE_PATH_PATTERN.exec(url.pathname);
 		const instanceId = instanceMatch?.[1];
 		const isWsPath = instanceMatch !== null && url.pathname === `/i/${instanceId}/ws`;
-		if (!isWsPath || !instanceId || !tokenMatches(cookieToken(request), token)) {
-			socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+		if (!isWsPath || !instanceId) {
+			socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
 			socket.destroy();
 			return;
 		}

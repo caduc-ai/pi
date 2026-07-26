@@ -4,7 +4,6 @@
  * answered; everything else returns an error.
  */
 
-import * as crypto from "node:crypto";
 import { existsSync } from "node:fs";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai/compat";
@@ -189,13 +188,12 @@ export async function runWebViewMode(sessionPath: string, options: WebViewModeOp
 	const bridge = new SessionViewBridge(resolved);
 
 	const host = options.host ?? "127.0.0.1";
-	const token = crypto.randomBytes(16).toString("base64url");
-	const server = await startWebServer({ bridge, host, port: options.port ?? 0, token });
+	const server = await startWebServer({ bridge, host, port: options.port ?? 0 });
 
 	const displayHost = host === "0.0.0.0" || host === "::" ? "<this-machine>" : host;
 	console.log(chalk.bold("pi session viewer") + chalk.dim(` (read-only, ${resolved})`));
 	console.log();
-	console.log(`  ${chalk.cyan(`http://${displayHost}:${server.port}/?token=${token}`)}`);
+	console.log(`  ${chalk.cyan(`http://${displayHost}:${server.port}/`)}`);
 	console.log();
 
 	const signals: NodeJS.Signals[] = ["SIGTERM", "SIGINT"];

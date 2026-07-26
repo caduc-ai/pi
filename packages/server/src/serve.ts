@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 import { getSocketPath } from "./config.ts";
@@ -20,14 +19,13 @@ export async function serve(options: ServeOptions = {}): Promise<void> {
 	mkdirSync(dirname(socketPath), { recursive: true });
 
 	let webPort: number | undefined;
-	let webToken: string | undefined;
 	const server = await startIpcServer(
 		Object.assign(handleIpcRequest, {
 			openRpcStream,
 			registerInstance: (
 				socket: Parameters<typeof handleRegisterInstance>[0],
 				request: Parameters<typeof handleRegisterInstance>[1],
-			) => handleRegisterInstance(socket, request, webPort, webToken),
+			) => handleRegisterInstance(socket, request, webPort),
 		}),
 	);
 
@@ -54,12 +52,11 @@ export async function serve(options: ServeOptions = {}): Promise<void> {
 
 	let webHandle: ServerWebHandle | undefined;
 	if (options.web) {
-		webToken = randomBytes(16).toString("base64url");
 		const host = options.web.host ?? "127.0.0.1";
-		webHandle = await startServerWeb({ host, port: options.web.port ?? 0, token: webToken });
+		webHandle = await startServerWeb({ host, port: options.web.port ?? 0 });
 		webPort = webHandle.port;
 		const displayHost = host === "0.0.0.0" || host === "::" ? "<this-machine>" : host;
-		console.log(`web UI: http://${displayHost}:${webHandle.port}/?token=${webToken}`);
+		console.log(`web UI: http://${displayHost}:${webHandle.port}/`);
 	}
 
 	let shutdownPromise: Promise<void> | undefined;
