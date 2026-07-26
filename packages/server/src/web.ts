@@ -11,7 +11,7 @@
  * - GET /themes, /theme/*     TUI theme files, shared by all instances
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import { homedir } from "node:os";
@@ -168,7 +168,7 @@ function renderIndexPage(): string {
 </head>
 <body>
 	<h1>pi server</h1>
-	<p><a href="/review">Code review</a></p>
+	<p><a href="/review">Code review</a> · <a href="/terminal">Terminal</a></p>
 	<h2 style="font-size:1em;margin-top:1.5em">Sessions</h2>
 	<ul>
 ${items}
@@ -426,6 +426,95 @@ function renderReviewPage(): string {
 </html>`;
 }
 
+function renderTerminalPage(): string {
+	return `<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>pi terminal</title>
+	<style>
+		body { font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+		header { padding: 8px 14px; border-bottom: 1px solid #2a2a2a; font-size: 13px; color: #999; display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+		header a { color: #8abeb7; text-decoration: none; }
+		header input { font-family: inherit; font-size: 13px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 4px 8px; border-radius: 3px; width: 200px; }
+		#output { flex: 1; overflow-y: auto; padding: 1em; font-size: 0.85em; line-height: 1.5; white-space: pre-wrap; }
+		#input-line { display: flex; border-top: 1px solid #2a2a2a; flex-shrink: 0; }
+		#input-line span { padding: 8px 12px; color: #60c060; font-size: 0.9em; user-select: none; }
+		#input-line input { flex: 1; font-family: inherit; font-size: 0.9em; background: transparent; color: #e6e6e6; border: none; padding: 8px 0; outline: none; }
+		.dim { color: #666; }
+		.err { color: #e06060; }
+	</style>
+</head>
+<body>
+	<header>
+		<a href="/">pi</a>
+		<span>/</span>
+		<span>terminal</span>
+		<span style="flex:1"></span>
+		<input id="cwd" placeholder="${escapeHtml(process.cwd())}" title="Working directory" />
+	</header>
+	<div id="output"></div>
+	<div id="input-line">
+		<span>$</span>
+		<input id="cmd" autofocus placeholder="Enter command…" />
+	</div>
+	<script>
+		const output = document.getElementById("output");
+		const cmd = document.getElementById("cmd");
+		const cwdInput = document.getElementById("cwd");
+		let history = [];
+		let historyIdx = -1;
+
+		function append(text, cls) {
+			const el = document.createElement("div");
+			if (cls) el.className = cls;
+			el.textContent = text;
+			output.appendChild(el);
+			output.scrollTop = output.scrollHeight;
+		}
+
+		async function run() {
+			const command = cmd.value.trim();
+			if (!command) return;
+			history.push(command);
+			historyIdx = history.length;
+			cmd.value = "";
+			append("$ " + command, "dim");
+			cmd.disabled = true;
+			try {
+				const cwd = cwdInput.value.trim() || "";
+				const res = await fetch("/api/bash", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ command, cwd: cwd || undefined }),
+				});
+				const data = await res.json();
+				if (data.output) append(data.output.trimEnd());
+				if (data.error) append(data.error, "err");
+			} catch (err) {
+				append(err.message || "Failed", "err");
+			}
+			cmd.disabled = false;
+			cmd.focus();
+		}
+
+		cmd.addEventListener("keydown", function(e) {
+			if (e.key === "Enter") { e.preventDefault(); run(); }
+			else if (e.key === "ArrowUp") {
+				e.preventDefault();
+				if (historyIdx > 0) { historyIdx--; cmd.value = history[historyIdx]; }
+			} else if (e.key === "ArrowDown") {
+				e.preventDefault();
+				if (historyIdx < history.length - 1) { historyIdx++; cmd.value = history[historyIdx]; }
+				else { historyIdx = history.length; cmd.value = ""; }
+			}
+		});
+	</script>
+</body>
+</html>`;
+}
+
 const INSTANCE_PATH_PATTERN = /^\/i\/([0-9a-f-]{36})(\/|$)/;
 
 export async function startServerWeb(options: ServerWebOptions): Promise<ServerWebHandle> {
@@ -478,6 +567,38 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			});
 			return;
 		}
+		// Terminal API
+		if (url.pathname === "/api/bash" && request.method === "POST") {
+			let body = "";
+			request.on("data", (chunk: Buffer | string) => {
+				body += chunk.toString();
+			});
+			request.on("end", () => {
+				const { command, cwd } = JSON.parse(body) as { command: string; cwd?: string };
+				try {
+					const stdout = execSync(command, {
+						cwd: cwd || process.cwd(),
+						encoding: "utf-8",
+						maxBuffer: 10 * 1024 * 1024,
+						timeout: 30_000,
+					});
+					response.writeHead(200, { "content-type": "application/json" });
+					response.end(JSON.stringify({ ok: true, output: stdout }));
+				} catch (error) {
+					const err = error as { stdout?: string; stderr?: string; message?: string };
+					response.writeHead(200, { "content-type": "application/json" });
+					response.end(
+						JSON.stringify({
+							ok: false,
+							output: (err.stdout || "") + (err.stderr || ""),
+							error: err.message || String(error),
+						}),
+					);
+				}
+			});
+			return;
+		}
+
 		// Cranium review API
 		if (url.pathname === "/api/review/status" && request.method === "GET") {
 			response.writeHead(200, { "content-type": "application/json" });
@@ -592,6 +713,12 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 		if (url.pathname === "/review") {
 			response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
 			response.end(renderReviewPage());
+			return;
+		}
+
+		if (url.pathname === "/terminal") {
+			response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
+			response.end(renderTerminalPage());
 			return;
 		}
 
