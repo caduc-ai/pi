@@ -123,7 +123,7 @@ function renderIndexPage(): string {
 	const instances = supervisor.listLiveInstances();
 	const items =
 		instances.length === 0
-			? "<li>No running instances. Spawn one with: server spawn --cwd /path/to/project</li>"
+			? "<li>No instances.</li>"
 			: instances
 					.map(
 						(instance) =>
@@ -139,11 +139,21 @@ function renderIndexPage(): string {
 	<title>pi server</title>
 	<style>
 		body { font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 2em; }
-		h1 { font-size: 1.2em; }
+		h1 { font-size: 1.2em; margin-bottom: 1em; }
 		ul { list-style: none; padding: 0; }
 		li { margin: 0.6em 0; }
 		a { color: #8abeb7; }
 		.meta { color: #666; font-size: 0.85em; margin-left: 0.5em; }
+		.spawn-form { margin-top: 2em; padding-top: 1.5em; border-top: 1px solid #333; }
+		.spawn-form h2 { font-size: 1em; margin-bottom: 0.5em; }
+		.spawn-form label { display: block; margin: 0.4em 0; font-size: 0.9em; color: #999; }
+		.spawn-form input, .spawn-form button { font-family: inherit; font-size: 0.9em; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 0.4em 0.6em; border-radius: 3px; }
+		.spawn-form input { width: 300px; }
+		.spawn-form button { cursor: pointer; background: #2a4a3f; border-color: #3a6a5f; margin-top: 0.5em; }
+		.spawn-form button:hover { background: #3a6a5f; }
+		.spawn-result { margin-top: 0.5em; font-size: 0.9em; }
+		.spawn-result.error { color: #e06060; }
+		.spawn-result.success { color: #60c060; }
 	</style>
 </head>
 <body>
@@ -151,6 +161,46 @@ function renderIndexPage(): string {
 	<ul>
 ${items}
 	</ul>
+	<div class="spawn-form">
+		<h2>New session</h2>
+		<form method="POST" action="/api/spawn" onsubmit="spawnSession(event)">
+			<label>Working directory<br><input type="text" name="cwd" id="spawn-cwd" placeholder="${escapeHtml(process.cwd())}"/></label>
+			<label>Label (optional)<br><input type="text" name="label" id="spawn-label" placeholder="My project"/></label>
+			<button type="submit">Spawn</button>
+		</form>
+		<div class="spawn-result" id="spawn-result"></div>
+	</div>
+	<script>
+		async function spawnSession(event) {
+			event.preventDefault();
+			const resultEl = document.getElementById("spawn-result");
+			resultEl.textContent = "Spawning…";
+			resultEl.className = "spawn-result";
+			try {
+				const formData = new FormData(event.target);
+				const res = await fetch("/api/spawn", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						cwd: formData.get("cwd") || "",
+						label: formData.get("label") || undefined,
+					}),
+				});
+				const data = await res.json();
+				if (data.ok && data.instance) {
+					resultEl.textContent = "Spawned! Opening…";
+					resultEl.className = "spawn-result success";
+					window.location.href = "/i/" + data.instance.id + "/";
+				} else {
+					resultEl.textContent = "Error: " + (data.error || "unknown");
+					resultEl.className = "spawn-result error";
+				}
+			} catch (error) {
+				resultEl.textContent = "Error: " + error.message;
+				resultEl.className = "spawn-result error";
+			}
+		}
+	</script>
 </body>
 </html>`;
 }
@@ -186,7 +236,52 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 		}
 
 		if (!tokenMatches(cookieToken(request), token)) {
-			sendText(response, 401, "Unauthorized\n");
+			response.writeHead(401, { "content-type": "text/html; charset=utf-8" });
+			response.end(
+				`<!doctype html><meta charset="utf-8"><title>pi server</title>` +
+					`<body style="font-family:ui-monospace,monospace;background:#0d0d0d;color:#e6e6e6;margin:2em">` +
+					`<h1>pi server</h1>` +
+					`<p>Visit <code style="background:#1a1a1a;padding:0.2em 0.4em;border-radius:3px">/?token=${escapeHtml(token)}</code> to sign in.</p>` +
+					`</body>`,
+			);
+			return;
+		}
+
+		// POST /api/spawn — spawn a new instance from the web dashboard
+		if (request.method === "POST" && url.pathname === "/api/spawn") {
+			let body = "";
+			request.on("data", (chunk: Buffer | string) => {
+				body += chunk.toString();
+			});
+			request.on("end", () => {
+				void (async () => {
+					try {
+						const parsed = JSON.parse(body) as { cwd?: string; label?: string };
+						const cwd = parsed.cwd?.trim() || process.cwd();
+						const instance = await supervisor.spawnInstance({ cwd, label: parsed.label });
+						response.writeHead(200, { "content-type": "application/json" });
+						response.end(
+							JSON.stringify({
+								ok: true,
+								instance: {
+									id: instance.id,
+									status: instance.status,
+									cwd: instance.cwd,
+									label: instance.label,
+								},
+							}),
+						);
+					} catch (error: unknown) {
+						response.writeHead(500, { "content-type": "application/json" });
+						response.end(
+							JSON.stringify({
+								ok: false,
+								error: error instanceof Error ? error.message : String(error),
+							}),
+						);
+					}
+				})();
+			});
 			return;
 		}
 

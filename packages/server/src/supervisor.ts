@@ -235,21 +235,25 @@ export class ServerSupervisor {
 		live.uiSubscribers.clear();
 		live.answeredDialogs.clear();
 		live.resources.rpcProcess?.setUiRequestHandler(undefined);
+		live.resources.rpcChannel?.setUiRequestHandler(undefined);
 	}
 
-	private bindRpcProcess(live: LiveInstance, rpcProcess: RpcProcessInstance): void {
+	private bindRpcChannel(live: LiveInstance, channel: RpcChannel): void {
 		this.clearBindings(live);
-		live.resources.rpcProcess = rpcProcess;
-		live.unsubscribeEvents = rpcProcess.onEvent((event) => {
+		if (channel instanceof SocketRpcChannel) {
+			live.resources.rpcChannel = channel;
+		} else {
+			live.resources.rpcProcess = channel as RpcProcessInstance;
+		}
+		live.unsubscribeEvents = channel.onEvent((event) => {
 			for (const subscriber of live.subscribers) {
 				subscriber(event);
 			}
 		});
-		live.unsubscribeExit = rpcProcess.onExit((error) => {
+		live.unsubscribeExit = channel.onExit((error) => {
 			void this.handleUnexpectedRpcExit(live, error);
 		});
-		rpcProcess.setUiRequestHandler((request) => {
-			// New dialog: clear any stale answered marker (ids are unique, this is just hygiene)
+		channel.setUiRequestHandler((request) => {
 			live.answeredDialogs.delete(request.id);
 			for (const subscriber of live.uiSubscribers) {
 				subscriber(request);
@@ -278,17 +282,17 @@ export class ServerSupervisor {
 		this.liveInstances.delete(live.record.id);
 	}
 
-	private getRpcProcess(live: LiveInstance): RpcProcessInstance | undefined {
-		return live.resources.rpcProcess;
+	private getRpcChannel(live: LiveInstance): RpcChannel | undefined {
+		return live.resources.rpcChannel ?? live.resources.rpcProcess;
 	}
 
 	private async syncInstanceRecord(live: LiveInstance): Promise<void> {
-		const rpcProcess = this.getRpcProcess(live);
-		if (!rpcProcess) {
+		const channel = this.getRpcChannel(live);
+		if (!channel) {
 			this.updateRecord(live, {});
 			return;
 		}
-		const response = await rpcProcess.send({ type: "get_state" });
+		const response = await channel.send({ type: "get_state" });
 		if (!isGetStateSuccess(response)) {
 			this.updateRecord(live, {});
 			return;
@@ -300,7 +304,7 @@ export class ServerSupervisor {
 	}
 
 	private async cleanupAcquiredResources(live: LiveInstance): Promise<void> {
-		const rpcProcess = live.resources.rpcProcess;
+		const channel = live.resources.rpcChannel ?? live.resources.rpcProcess;
 		this.clearBindings(live);
 		if (live.resources.radiusPiId) {
 			await radiusPresence.disconnectPi(live.record);
@@ -312,9 +316,10 @@ export class ServerSupervisor {
 			};
 		}
 		live.resources.sessionId = undefined;
-		if (rpcProcess) {
+		if (channel) {
+			live.resources.rpcChannel = undefined;
 			live.resources.rpcProcess = undefined;
-			await rpcProcess.dispose();
+			await channel.dispose();
 		}
 	}
 
@@ -351,29 +356,26 @@ export class ServerSupervisor {
 		  }
 		| undefined {
 		const live = this.liveInstances.get(instanceId);
-		const rpcProcess = live ? this.getRpcProcess(live) : undefined;
-		if (!live || !rpcProcess) {
+		const channel = live ? this.getRpcChannel(live) : undefined;
+		if (!live || !channel) {
 			return undefined;
 		}
 		live.subscribers.add(onEvent);
 		live.uiSubscribers.add(onUiMessage);
 		return {
 			handleRpc: async (command) => {
-				const response = await rpcProcess.send(command);
+				const response = await channel.send(command);
 				if (shouldRefreshSessionMetadata(command)) {
 					await this.syncInstanceRecord(live);
 				}
 				return response;
 			},
 			handleUiResponse: (response) => {
-				// First response wins: forward to the child and cancel all other clients.
-				// (The child's own extension_ui_cancel for answered dialogs is only sent to
-				// the answering channel, which is this supervisor, so we synthesize it here.)
 				if (live.answeredDialogs.has(response.id)) {
 					return;
 				}
 				live.answeredDialogs.add(response.id);
-				rpcProcess.handleUiResponse(response);
+				channel.handleUiResponse(response);
 				const cancel: RpcExtensionUICancel = { type: "extension_ui_cancel", id: response.id };
 				for (const subscriber of live.uiSubscribers) {
 					if (subscriber !== onUiMessage) {
@@ -444,8 +446,45 @@ export class ServerSupervisor {
 
 		try {
 			const rpcProcess = createRpcProcessInstance({ cwd: options.cwd });
-			this.bindRpcProcess(live, rpcProcess);
+			this.bindRpcChannel(live, rpcProcess);
 			await this.syncInstanceRecord(live);
+			const registeredRecord = await radiusPresence.registerPi(live.record);
+			this.updateRecord(live, { radiusPiId: registeredRecord.radiusPiId });
+			this.setStatus(live, "online");
+			return cloneInstance(live.record);
+		} catch (error) {
+			return await this.failSpawn(live, error);
+		}
+	}
+
+	/** Register an externally-owned session via an IPC socket. The socket becomes the RPC channel. */
+	async registerInstance(
+		socket: Socket,
+		options: { cwd: string; label?: string; sessionId?: string; sessionFile?: string },
+	): Promise<InstanceRecord> {
+		const now = new Date().toISOString();
+		const live: LiveInstance = {
+			record: {
+				id: randomUUID(),
+				status: "starting",
+				cwd: options.cwd,
+				createdAt: now,
+				lastSeenAt: now,
+				label: options.label,
+				sessionId: options.sessionId,
+				sessionFile: options.sessionFile,
+			},
+			resources: {},
+			subscribers: new Set(),
+			uiSubscribers: new Set(),
+			answeredDialogs: new Set(),
+		};
+		this.liveInstances.set(live.record.id, live);
+		upsertInstance(live.record);
+
+		try {
+			const channel = new SocketRpcChannel(socket);
+			this.bindRpcChannel(live, channel);
 			const registeredRecord = await radiusPresence.registerPi(live.record);
 			this.updateRecord(live, { radiusPiId: registeredRecord.radiusPiId });
 			this.setStatus(live, "online");
@@ -478,12 +517,12 @@ export class ServerSupervisor {
 
 	async handleRpc(instanceId: string, command: RpcCommand): Promise<RpcResponse | undefined> {
 		const live = this.liveInstances.get(instanceId);
-		const rpcProcess = live ? this.getRpcProcess(live) : undefined;
-		if (!live || !rpcProcess) {
+		const channel = live ? this.getRpcChannel(live) : undefined;
+		if (!live || !channel) {
 			return undefined;
 		}
 
-		const response = await rpcProcess.send(command);
+		const response = await channel.send(command);
 		if (shouldRefreshSessionMetadata(command)) {
 			await this.syncInstanceRecord(live);
 		}

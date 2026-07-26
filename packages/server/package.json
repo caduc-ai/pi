@@ -12,7 +12,7 @@
 		}
 	},
 	"bin": {
-		"server": "./dist/cli.js"
+		"pi-server": "./dist/cli.js"
 	},
 	"files": [
 		"dist",
