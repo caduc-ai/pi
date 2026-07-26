@@ -41,6 +41,14 @@ export interface RpcStreamRequest {
 	instanceId: string;
 }
 
+export interface RegisterRequest {
+	type: "register";
+	cwd: string;
+	label?: string;
+	sessionId?: string;
+	sessionFile?: string;
+}
+
 export interface RequestMap {
 	spawn: SpawnRequest;
 	list: ListRequest;
@@ -48,6 +56,7 @@ export interface RequestMap {
 	status: StatusRequest;
 	rpc: RpcRequest;
 	rpc_stream: RpcStreamRequest;
+	register: RegisterRequest;
 }
 
 export type ServerRequest = RequestMap[keyof RequestMap];
@@ -60,6 +69,7 @@ export interface InstanceSummary {
 	sessionId?: string;
 	sessionFile?: string;
 	radiusPiId?: string;
+	webPort?: number;
 }
 
 export interface ResponseBase {
@@ -97,6 +107,11 @@ export interface RpcReadyResponse extends ResponseBase {
 	instance?: InstanceSummary;
 }
 
+export interface RegisterResponse extends ResponseBase {
+	type: "register_result";
+	instance?: InstanceSummary;
+}
+
 export interface ErrorResponse extends ResponseBase {
 	type: "error";
 	ok: false;
@@ -110,6 +125,7 @@ export interface ResponseMap {
 	status: StatusResponse;
 	rpc: RpcBridgeResponse;
 	rpc_stream: RpcReadyResponse;
+	register: RegisterResponse;
 }
 
 export type ServerResponse = ResponseMap[keyof ResponseMap] | ErrorResponse;

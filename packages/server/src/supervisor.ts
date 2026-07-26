@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Socket } from "node:net";
 import type {
 	AgentSessionEvent,
 	AgentSessionEventListener,
@@ -13,8 +14,141 @@ import { createRpcProcessInstance, type RpcProcessInstance } from "./rpc-process
 import { getInstance, loadInstances, removeInstance, saveInstances, upsertInstance } from "./storage.ts";
 import type { InstanceRecord, InstanceStatus } from "./types.ts";
 
+/** Abstraction over an RPC transport (child process or socket). */
+export interface RpcChannel {
+	send(command: RpcCommand): Promise<RpcResponse>;
+	handleUiResponse(response: RpcExtensionUIResponse): void;
+	setUiRequestHandler(handler?: (request: RpcExtensionUIRequest) => void): void;
+	onEvent(listener: (event: AgentSessionEvent) => void): () => void;
+	onExit(listener: (error?: Error) => void): () => void;
+	dispose(): Promise<void>;
+}
+
+/** Wraps a net.Socket as an RpcChannel for externally-registered instances. */
+class SocketRpcChannel implements RpcChannel {
+	private readonly socket: Socket;
+	private exited = false;
+	private buffer = "";
+	private nextRequestId = 0;
+	private readonly pendingRequests = new Map<
+		string,
+		{ resolve: (response: RpcResponse) => void; reject: (error: Error) => void }
+	>();
+	private readonly eventListeners = new Set<(event: AgentSessionEvent) => void>();
+	private readonly exitListeners = new Set<(error?: Error) => void>();
+	private uiRequestHandler: ((request: RpcExtensionUIRequest) => void) | undefined;
+
+	constructor(socket: Socket) {
+		this.socket = socket;
+		socket.on("data", (chunk: Buffer | string) => this.onData(chunk.toString()));
+		socket.once("error", (error) => this.handleExit(error));
+		socket.once("close", () => this.handleExit(new Error("Socket closed")));
+	}
+
+	private onData(chunk: string): void {
+		this.buffer += chunk;
+		for (;;) {
+			const newlineIndex = this.buffer.indexOf("\n");
+			if (newlineIndex === -1) break;
+			const line = this.buffer.slice(0, newlineIndex).trim();
+			this.buffer = this.buffer.slice(newlineIndex + 1);
+			if (!line) continue;
+			this.handleLine(line);
+		}
+	}
+
+	private handleLine(line: string): void {
+		let parsed: { type?: string; id?: string };
+		try {
+			parsed = JSON.parse(line) as { type?: string; id?: string };
+		} catch {
+			return;
+		}
+		switch (parsed.type) {
+			case "response": {
+				if (!parsed.id) return;
+				const pending = this.pendingRequests.get(parsed.id);
+				if (!pending) return;
+				this.pendingRequests.delete(parsed.id);
+				pending.resolve(parsed as RpcResponse);
+				return;
+			}
+			case "extension_ui_request": {
+				this.uiRequestHandler?.(parsed as RpcExtensionUIRequest);
+				return;
+			}
+			default: {
+				for (const listener of this.eventListeners) {
+					listener(parsed as AgentSessionEvent);
+				}
+			}
+		}
+	}
+
+	private rejectAllPending(error: Error): void {
+		for (const [id, pending] of this.pendingRequests) {
+			this.pendingRequests.delete(id);
+			pending.reject(error);
+		}
+	}
+
+	private handleExit(error?: Error): void {
+		if (this.exited) return;
+		this.exited = true;
+		this.rejectAllPending(error ?? new Error("RPC channel closed"));
+		for (const listener of this.exitListeners) {
+			listener(error);
+		}
+	}
+
+	send(command: RpcCommand): Promise<RpcResponse> {
+		if (this.exited) throw new Error("RPC channel is closed");
+		const id = command.id ?? `srv_${++this.nextRequestId}_${randomUUID()}`;
+		const fullCommand = { ...command, id };
+		return new Promise<RpcResponse>((resolve, reject) => {
+			this.pendingRequests.set(id, { resolve, reject });
+			if (!this.socket.write(`${JSON.stringify(fullCommand)}\n`)) {
+				this.pendingRequests.delete(id);
+				reject(new Error("Socket write failed"));
+			}
+		});
+	}
+
+	handleUiResponse(response: RpcExtensionUIResponse): void {
+		if (this.exited) return;
+		this.socket.write(`${JSON.stringify(response)}\n`);
+	}
+
+	setUiRequestHandler(handler?: (request: RpcExtensionUIRequest) => void): void {
+		this.uiRequestHandler = handler;
+	}
+
+	onEvent(listener: (event: AgentSessionEvent) => void): () => void {
+		this.eventListeners.add(listener);
+		return () => {
+			this.eventListeners.delete(listener);
+		};
+	}
+
+	onExit(listener: (error?: Error) => void): () => void {
+		this.exitListeners.add(listener);
+		return () => {
+			this.exitListeners.delete(listener);
+		};
+	}
+
+	async dispose(): Promise<void> {
+		this.uiRequestHandler = undefined;
+		this.rejectAllPending(new Error("RPC channel disposed"));
+		if (!this.exited) {
+			this.socket.destroy();
+		}
+	}
+}
+
 interface LiveInstanceResources {
 	rpcProcess?: RpcProcessInstance;
+	rpcChannel?: RpcChannel;
 	radiusPiId?: string;
 	sessionId?: string;
 }
@@ -101,21 +235,25 @@ export class ServerSupervisor {
 		live.uiSubscribers.clear();
 		live.answeredDialogs.clear();
 		live.resources.rpcProcess?.setUiRequestHandler(undefined);
+		live.resources.rpcChannel?.setUiRequestHandler(undefined);
 	}
 
-	private bindRpcProcess(live: LiveInstance, rpcProcess: RpcProcessInstance): void {
+	private bindRpcChannel(live: LiveInstance, channel: RpcChannel): void {
 		this.clearBindings(live);
-		live.resources.rpcProcess = rpcProcess;
-		live.unsubscribeEvents = rpcProcess.onEvent((event) => {
+		if (channel instanceof SocketRpcChannel) {
+			live.resources.rpcChannel = channel;
+		} else {
+			live.resources.rpcProcess = channel as RpcProcessInstance;
+		}
+		live.unsubscribeEvents = channel.onEvent((event) => {
 			for (const subscriber of live.subscribers) {
 				subscriber(event);
 			}
 		});
-		live.unsubscribeExit = rpcProcess.onExit((error) => {
+		live.unsubscribeExit = channel.onExit((error) => {
 			void this.handleUnexpectedRpcExit(live, error);
 		});
-		rpcProcess.setUiRequestHandler((request) => {
-			// New dialog: clear any stale answered marker (ids are unique, this is just hygiene)
+		channel.setUiRequestHandler((request) => {
 			live.answeredDialogs.delete(request.id);
 			for (const subscriber of live.uiSubscribers) {
 				subscriber(request);
@@ -144,17 +282,17 @@ export class ServerSupervisor {
 		this.liveInstances.delete(live.record.id);
 	}
 
-	private getRpcProcess(live: LiveInstance): RpcProcessInstance | undefined {
-		return live.resources.rpcProcess;
+	private getRpcChannel(live: LiveInstance): RpcChannel | undefined {
+		return live.resources.rpcChannel ?? live.resources.rpcProcess;
 	}
 
 	private async syncInstanceRecord(live: LiveInstance): Promise<void> {
-		const rpcProcess = this.getRpcProcess(live);
-		if (!rpcProcess) {
+		const channel = this.getRpcChannel(live);
+		if (!channel) {
 			this.updateRecord(live, {});
 			return;
 		}
-		const response = await rpcProcess.send({ type: "get_state" });
+		const response = await channel.send({ type: "get_state" });
 		if (!isGetStateSuccess(response)) {
 			this.updateRecord(live, {});
 			return;
@@ -166,7 +304,7 @@ export class ServerSupervisor {
 	}
 
 	private async cleanupAcquiredResources(live: LiveInstance): Promise<void> {
-		const rpcProcess = live.resources.rpcProcess;
+		const channel = live.resources.rpcChannel ?? live.resources.rpcProcess;
 		this.clearBindings(live);
 		if (live.resources.radiusPiId) {
 			await radiusPresence.disconnectPi(live.record);
@@ -178,9 +316,10 @@ export class ServerSupervisor {
 			};
 		}
 		live.resources.sessionId = undefined;
-		if (rpcProcess) {
+		if (channel) {
+			live.resources.rpcChannel = undefined;
 			live.resources.rpcProcess = undefined;
-			await rpcProcess.dispose();
+			await channel.dispose();
 		}
 	}
 
@@ -217,29 +356,26 @@ export class ServerSupervisor {
 		  }
 		| undefined {
 		const live = this.liveInstances.get(instanceId);
-		const rpcProcess = live ? this.getRpcProcess(live) : undefined;
-		if (!live || !rpcProcess) {
+		const channel = live ? this.getRpcChannel(live) : undefined;
+		if (!live || !channel) {
 			return undefined;
 		}
 		live.subscribers.add(onEvent);
 		live.uiSubscribers.add(onUiMessage);
 		return {
 			handleRpc: async (command) => {
-				const response = await rpcProcess.send(command);
+				const response = await channel.send(command);
 				if (shouldRefreshSessionMetadata(command)) {
 					await this.syncInstanceRecord(live);
 				}
 				return response;
 			},
 			handleUiResponse: (response) => {
-				// First response wins: forward to the child and cancel all other clients.
-				// (The child's own extension_ui_cancel for answered dialogs is only sent to
-				// the answering channel, which is this supervisor, so we synthesize it here.)
 				if (live.answeredDialogs.has(response.id)) {
 					return;
 				}
 				live.answeredDialogs.add(response.id);
-				rpcProcess.handleUiResponse(response);
+				channel.handleUiResponse(response);
 				const cancel: RpcExtensionUICancel = { type: "extension_ui_cancel", id: response.id };
 				for (const subscriber of live.uiSubscribers) {
 					if (subscriber !== onUiMessage) {
@@ -289,7 +425,7 @@ export class ServerSupervisor {
 		return stored ? cloneInstance(stored) : undefined;
 	}
 
-	async spawnInstance(options: { cwd: string; label?: string }): Promise<InstanceRecord> {
+	async spawnInstance(options: { cwd: string; label?: string; sessionFile?: string }): Promise<InstanceRecord> {
 		const now = new Date().toISOString();
 		const live: LiveInstance = {
 			record: {
@@ -309,9 +445,46 @@ export class ServerSupervisor {
 		upsertInstance(live.record);
 
 		try {
-			const rpcProcess = createRpcProcessInstance({ cwd: options.cwd });
-			this.bindRpcProcess(live, rpcProcess);
+			const rpcProcess = createRpcProcessInstance({ cwd: options.cwd, sessionFile: options.sessionFile });
+			this.bindRpcChannel(live, rpcProcess);
 			await this.syncInstanceRecord(live);
+			const registeredRecord = await radiusPresence.registerPi(live.record);
+			this.updateRecord(live, { radiusPiId: registeredRecord.radiusPiId });
+			this.setStatus(live, "online");
+			return cloneInstance(live.record);
+		} catch (error) {
+			return await this.failSpawn(live, error);
+		}
+	}
+
+	/** Register an externally-owned session via an IPC socket. The socket becomes the RPC channel. */
+	async registerInstance(
+		socket: Socket,
+		options: { cwd: string; label?: string; sessionId?: string; sessionFile?: string },
+	): Promise<InstanceRecord> {
+		const now = new Date().toISOString();
+		const live: LiveInstance = {
+			record: {
+				id: randomUUID(),
+				status: "starting",
+				cwd: options.cwd,
+				createdAt: now,
+				lastSeenAt: now,
+				label: options.label,
+				sessionId: options.sessionId,
+				sessionFile: options.sessionFile,
+			},
+			resources: {},
+			subscribers: new Set(),
+			uiSubscribers: new Set(),
+			answeredDialogs: new Set(),
+		};
+		this.liveInstances.set(live.record.id, live);
+		upsertInstance(live.record);
+
+		try {
+			const channel = new SocketRpcChannel(socket);
+			this.bindRpcChannel(live, channel);
 			const registeredRecord = await radiusPresence.registerPi(live.record);
 			this.updateRecord(live, { radiusPiId: registeredRecord.radiusPiId });
 			this.setStatus(live, "online");
@@ -344,12 +517,12 @@ export class ServerSupervisor {
 
 	async handleRpc(instanceId: string, command: RpcCommand): Promise<RpcResponse | undefined> {
 		const live = this.liveInstances.get(instanceId);
-		const rpcProcess = live ? this.getRpcProcess(live) : undefined;
-		if (!live || !rpcProcess) {
+		const channel = live ? this.getRpcChannel(live) : undefined;
+		if (!live || !channel) {
 			return undefined;
 		}
 
-		const response = await rpcProcess.send(command);
+		const response = await channel.send(command);
 		if (shouldRefreshSessionMetadata(command)) {
 			await this.syncInstanceRecord(live);
 		}

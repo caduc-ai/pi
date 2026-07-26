@@ -11,6 +11,13 @@ function Header() {
 	const isConnected = connected.value;
 	return (
 		<header class="header">
+			<a href="/" class="header-home" title="All sessions">
+				<svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+					<title>Home</title>
+					<path d="M2 6l6-4 6 4v8H2V6z" stroke="currentColor" stroke-width="1.2" fill="none" />
+					<rect x="6" y="9" width="4" height="5" stroke="currentColor" stroke-width="1.2" fill="none" />
+				</svg>
+			</a>
 			<span class="header-title">{name ? `pi — ${name}` : "pi"}</span>
 			<span
 				class={`connection-dot ${isConnected ? "online" : "offline"}`}

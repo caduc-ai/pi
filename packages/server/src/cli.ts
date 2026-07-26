@@ -18,7 +18,7 @@ const packageJson = JSON.parse(readFileSync(join(__dirname, "../package.json"), 
 
 function printHelp(): void {
 	console.log(
-		`server v${packageJson.version}\n\nUsage:\n  server serve [--web [--web-port <port>] [--web-host <host>]]\n  server list\n  server spawn [--cwd <path>] [--label <label>]\n  server status <instance-id>\n  server stop <instance-id>\n  server rpc <instance-id> <json-command>\n  server rpc-stream <instance-id>\n  server --help\n  server --version\n\nRPC stream stdin expects JSONL RpcCommand or extension_ui_response messages.`,
+		`pi-server v${packageJson.version}\n\nUsage:\n  pi-server serve [--web [--web-port <port>] [--web-host <host>]]\n  pi-server list\n  pi-server spawn [--cwd <path>] [--label <label>]\n  pi-server status <instance-id>\n  pi-server stop <instance-id>\n  pi-server rpc <instance-id> <json-command>\n  pi-server rpc-stream <instance-id>\n  pi-server --help\n  pi-server --version\n\nRPC stream stdin expects JSONL RpcCommand or extension_ui_response messages.`,
 	);
 }
 

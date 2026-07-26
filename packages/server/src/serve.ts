@@ -1,8 +1,7 @@
-import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 import { getSocketPath } from "./config.ts";
-import { handleIpcRequest, openRpcStream } from "./handler.ts";
+import { handleIpcRequest, handleRegisterInstance, openRpcStream } from "./handler.ts";
 import { startIpcServer } from "./ipc/server.ts";
 import { getRadiusServerBaseUrl, isRadiusEnabled, radiusPresence } from "./radius.ts";
 import { supervisor } from "./supervisor.ts";
@@ -18,9 +17,15 @@ export interface ServeOptions {
 export async function serve(options: ServeOptions = {}): Promise<void> {
 	const socketPath = getSocketPath();
 	mkdirSync(dirname(socketPath), { recursive: true });
+
+	let webPort: number | undefined;
 	const server = await startIpcServer(
 		Object.assign(handleIpcRequest, {
 			openRpcStream,
+			registerInstance: (
+				socket: Parameters<typeof handleRegisterInstance>[0],
+				request: Parameters<typeof handleRegisterInstance>[1],
+			) => handleRegisterInstance(socket, request, webPort),
 		}),
 	);
 
@@ -47,11 +52,11 @@ export async function serve(options: ServeOptions = {}): Promise<void> {
 
 	let webHandle: ServerWebHandle | undefined;
 	if (options.web) {
-		const token = randomBytes(16).toString("base64url");
 		const host = options.web.host ?? "127.0.0.1";
-		webHandle = await startServerWeb({ host, port: options.web.port ?? 0, token });
+		webHandle = await startServerWeb({ host, port: options.web.port ?? 0 });
+		webPort = webHandle.port;
 		const displayHost = host === "0.0.0.0" || host === "::" ? "<this-machine>" : host;
-		console.log(`web UI: http://${displayHost}:${webHandle.port}/?token=${token}`);
+		console.log(`web UI: http://${displayHost}:${webHandle.port}/`);
 	}
 
 	let shutdownPromise: Promise<void> | undefined;

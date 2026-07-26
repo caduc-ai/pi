@@ -32,8 +32,11 @@ export class RpcProcessInstance {
 	private readonly exitListeners = new Set<(error?: Error) => void>();
 	private uiRequestHandler: ((request: RpcExtensionUIRequest) => void) | undefined;
 
-	constructor(options: { cwd: string }) {
+	constructor(options: { cwd: string; sessionFile?: string }) {
 		const rpcCommand = this.getSpawnCommand();
+		if (options.sessionFile) {
+			rpcCommand.args.push("--session", options.sessionFile);
+		}
 		this.process = spawn(rpcCommand.command, rpcCommand.args, {
 			cwd: options.cwd,
 			env: process.env,
@@ -52,10 +55,18 @@ export class RpcProcessInstance {
 				args: ["--mode", "rpc"],
 			};
 		}
+		// Dev mode: run via tsx so TypeScript source works without a build step.
+		const srcDir = dirname(fileURLToPath(import.meta.url));
+		const repoRoot = dirname(dirname(dirname(srcDir)));
+		const tsxBin = join(repoRoot, "node_modules", ".bin", "tsx");
 		return {
 			command: process.execPath,
-			// import.meta.resolve matches the "import" condition in the package exports map
-			args: [fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry"))],
+			args: [
+				tsxBin,
+				"--tsconfig",
+				join(repoRoot, "tsconfig.json"),
+				fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry")),
+			],
 		};
 	}
 
@@ -195,6 +206,6 @@ export class RpcProcessInstance {
 	}
 }
 
-export function createRpcProcessInstance(options: { cwd: string }): RpcProcessInstance {
+export function createRpcProcessInstance(options: { cwd: string; sessionFile?: string }): RpcProcessInstance {
 	return new RpcProcessInstance(options);
 }

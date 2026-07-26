@@ -1,3 +1,4 @@
+import type { Socket } from "node:net";
 import type {
 	AgentSessionEvent,
 	RpcCommand,
@@ -9,6 +10,8 @@ import type {
 	InstanceSummary,
 	ListRequest,
 	ListResponse,
+	RegisterRequest,
+	RegisterResponse,
 	RpcBridgeResponse,
 	RpcReadyResponse,
 	RpcRequest,
@@ -26,7 +29,7 @@ import type { UiStreamMessage } from "./supervisor.ts";
 import { supervisor } from "./supervisor.ts";
 import type { InstanceRecord } from "./types.ts";
 
-function toInstanceSummary(instance: InstanceRecord): InstanceSummary {
+function toInstanceSummary(instance: InstanceRecord, webPort?: number): InstanceSummary {
 	return {
 		id: instance.id,
 		status: instance.status,
@@ -35,6 +38,7 @@ function toInstanceSummary(instance: InstanceRecord): InstanceSummary {
 		sessionId: instance.sessionId,
 		sessionFile: instance.sessionFile,
 		radiusPiId: instance.radiusPiId,
+		webPort,
 	};
 }
 
@@ -46,13 +50,14 @@ function unknownInstanceError(instanceId: string): ErrorResponse {
 	};
 }
 
-// Overhead types
+// Overload declarations
 export async function handleIpcRequest(request: SpawnRequest): Promise<SpawnResponse | ErrorResponse>;
 export async function handleIpcRequest(request: ListRequest): Promise<ListResponse | ErrorResponse>;
 export async function handleIpcRequest(request: StopRequest): Promise<StopResponse | ErrorResponse>;
 export async function handleIpcRequest(request: StatusRequest): Promise<StatusResponse | ErrorResponse>;
 export async function handleIpcRequest(request: RpcRequest): Promise<RpcBridgeResponse | ErrorResponse>;
 export async function handleIpcRequest(request: RpcStreamRequest): Promise<RpcReadyResponse | ErrorResponse>;
+export async function handleIpcRequest(request: RegisterRequest): Promise<RegisterResponse | ErrorResponse>;
 export async function handleIpcRequest(request: ServerRequest): Promise<ServerResponse>;
 export async function handleIpcRequest(request: ServerRequest): Promise<ServerResponse> {
 	switch (request.type) {
@@ -72,7 +77,7 @@ export async function handleIpcRequest(request: ServerRequest): Promise<ServerRe
 			return {
 				type: "list_result",
 				ok: true,
-				instances: supervisor.listInstances().map(toInstanceSummary),
+				instances: supervisor.listInstances().map((i) => toInstanceSummary(i)),
 			};
 		}
 
@@ -126,6 +131,42 @@ export async function handleIpcRequest(request: ServerRequest): Promise<ServerRe
 				instance: toInstanceSummary(instance),
 			};
 		}
+
+		case "register": {
+			// register is handled directly in the IPC server (needs the socket).
+			// handleIpcRequest is not called for register requests.
+			return { type: "error", ok: false, error: "register is handled at the transport layer" };
+		}
+	}
+}
+
+/**
+ * Handle a register request over an IPC socket. The socket stays open after
+ * the response and becomes the bidirectional RPC channel for the instance.
+ */
+export async function handleRegisterInstance(
+	socket: Socket,
+	request: RegisterRequest,
+	webPort?: number,
+): Promise<RegisterResponse | ErrorResponse> {
+	try {
+		const instance = await supervisor.registerInstance(socket, {
+			cwd: request.cwd,
+			label: request.label,
+			sessionId: request.sessionId,
+			sessionFile: request.sessionFile,
+		});
+		return {
+			type: "register_result",
+			ok: true,
+			instance: toInstanceSummary(instance, webPort),
+		};
+	} catch (error: unknown) {
+		return {
+			type: "error",
+			ok: false,
+			error: error instanceof Error ? error.message : String(error),
+		};
 	}
 }
 

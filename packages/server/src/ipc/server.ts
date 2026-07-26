@@ -1,5 +1,5 @@
 import { existsSync, unlinkSync } from "node:fs";
-import { createConnection, createServer, type Server } from "node:net";
+import { createConnection, createServer, type Server, type Socket } from "node:net";
 import type { AgentSessionEvent, RpcResponse } from "@earendil-works/pi-coding-agent";
 import { getSocketPath } from "../config.ts";
 import type { UiStreamMessage } from "../supervisor.ts";
@@ -9,6 +9,8 @@ import {
 	type ListRequest,
 	type ListResponse,
 	parseRequestLine,
+	type RegisterRequest,
+	type RegisterResponse,
 	type RpcBridgeResponse,
 	type RpcReadyResponse,
 	type RpcRequest,
@@ -30,6 +32,7 @@ export interface IpcRequestHandler {
 	(request: StatusRequest): Promise<StatusResponse | ErrorResponse> | StatusResponse | ErrorResponse;
 	(request: RpcRequest): Promise<RpcBridgeResponse | ErrorResponse> | RpcBridgeResponse | ErrorResponse;
 	(request: RpcStreamRequest): Promise<RpcReadyResponse | ErrorResponse> | RpcReadyResponse | ErrorResponse;
+	(request: RegisterRequest): Promise<RegisterResponse | ErrorResponse> | RegisterResponse | ErrorResponse;
 	(request: ServerRequest): Promise<ServerResponse> | ServerResponse;
 	openRpcStream(
 		instanceId: string,
@@ -42,6 +45,7 @@ export interface IpcRequestHandler {
 				close(): void;
 		  }
 		| undefined;
+	registerInstance(socket: Socket, request: RegisterRequest): Promise<RegisterResponse | ErrorResponse>;
 }
 
 export async function startIpcServer(handler: IpcRequestHandler): Promise<Server> {
@@ -66,6 +70,12 @@ export async function startIpcServer(handler: IpcRequestHandler): Promise<Server
 
 			try {
 				const request = parseRequestLine(line);
+				if (request.type === "register") {
+					socket.removeAllListeners("data");
+					const response = await handler.registerInstance(socket, request);
+					socket.write(encodeMessage(response));
+					return;
+				}
 				if (request.type === "rpc_stream") {
 					const response = await handler(request);
 					if (!response.ok || response.type !== "rpc_ready" || !response.instance) {
