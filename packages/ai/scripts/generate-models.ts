@@ -2622,13 +2622,27 @@ async function generateModels() {
 `;
 				const catalogConstName = (providerId: string) =>
 					`${providerId.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_MODELS`;
+				const generatedModelGroupsType = (providerId: string): string => {
+					let output = "type GeneratedModelGroups = {\n";
+					for (const api of Object.keys(generatedDataProviders[providerId]).sort()) {
+						output += `\t${JSON.stringify(api)}: {\n`;
+						for (const modelId of Object.keys(generatedDataProviders[providerId][api]).sort()) {
+							output += `\t\t${JSON.stringify(modelId)}: object;\n`;
+						}
+						output += "\t};\n";
+					}
+					output += "};\n";
+					return output;
+				};
 				const generatedShardFiles = new Set<string>();
 				for (const providerId of sortedProviderIds) {
 					let output = generatedHeader;
 					output += `import values from "./data/${providerId}.json" with { type: "json" };\n`;
 					output += `import { flattenModelCatalog, type ModelCatalog } from "../model-catalog.ts";\n\n`;
-					output += `export const ${catalogConstName(providerId)}: ModelCatalog<typeof values, ${JSON.stringify(providerId)}> =\n`;
-					output += `\tflattenModelCatalog(${JSON.stringify(providerId)}, values);\n`;
+					output += generatedModelGroupsType(providerId);
+					output += "\nconst modelGroups = values as GeneratedModelGroups;\n\n";
+					output += `export const ${catalogConstName(providerId)}: ModelCatalog<typeof modelGroups, ${JSON.stringify(providerId)}> =\n`;
+					output += `\tflattenModelCatalog(${JSON.stringify(providerId)}, modelGroups);\n`;
 					const filename = `${providerId}.models.ts`;
 					generatedShardFiles.add(filename);
 					writeFileSync(join(providersDir, filename), output);

@@ -4,5 +4,19 @@
 import values from "./data/openai-codex.json" with { type: "json" };
 import { flattenModelCatalog, type ModelCatalog } from "../model-catalog.ts";
 
-export const OPENAI_CODEX_MODELS: ModelCatalog<typeof values, "openai-codex"> =
-	flattenModelCatalog("openai-codex", values);
+type GeneratedModelGroups = {
+	"openai-codex-responses": {
+		"gpt-5.3-codex-spark": object;
+		"gpt-5.4": object;
+		"gpt-5.4-mini": object;
+		"gpt-5.5": object;
+		"gpt-5.6-luna": object;
+		"gpt-5.6-sol": object;
+		"gpt-5.6-terra": object;
+	};
+};
+
+const modelGroups = values as GeneratedModelGroups;
+
+export const OPENAI_CODEX_MODELS: ModelCatalog<typeof modelGroups, "openai-codex"> =
+	flattenModelCatalog("openai-codex", modelGroups);

@@ -4,5 +4,18 @@
 import values from "./data/zai.json" with { type: "json" };
 import { flattenModelCatalog, type ModelCatalog } from "../model-catalog.ts";
 
-export const ZAI_MODELS: ModelCatalog<typeof values, "zai"> =
-	flattenModelCatalog("zai", values);
+type GeneratedModelGroups = {
+	"openai-completions": {
+		"glm-4.5-air": object;
+		"glm-4.7": object;
+		"glm-5-turbo": object;
+		"glm-5.1": object;
+		"glm-5.2": object;
+		"glm-5v-turbo": object;
+	};
+};
+
+const modelGroups = values as GeneratedModelGroups;
+
+export const ZAI_MODELS: ModelCatalog<typeof modelGroups, "zai"> =
+	flattenModelCatalog("zai", modelGroups);

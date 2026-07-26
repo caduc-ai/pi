@@ -4,5 +4,27 @@
 import values from "./data/anthropic.json" with { type: "json" };
 import { flattenModelCatalog, type ModelCatalog } from "../model-catalog.ts";
 
-export const ANTHROPIC_MODELS: ModelCatalog<typeof values, "anthropic"> =
-	flattenModelCatalog("anthropic", values);
+type GeneratedModelGroups = {
+	"anthropic-messages": {
+		"claude-fable-5": object;
+		"claude-haiku-4-5": object;
+		"claude-haiku-4-5-20251001": object;
+		"claude-opus-4-1": object;
+		"claude-opus-4-1-20250805": object;
+		"claude-opus-4-5": object;
+		"claude-opus-4-5-20251101": object;
+		"claude-opus-4-6": object;
+		"claude-opus-4-7": object;
+		"claude-opus-4-8": object;
+		"claude-opus-5": object;
+		"claude-sonnet-4-5": object;
+		"claude-sonnet-4-5-20250929": object;
+		"claude-sonnet-4-6": object;
+		"claude-sonnet-5": object;
+	};
+};
+
+const modelGroups = values as GeneratedModelGroups;
+
+export const ANTHROPIC_MODELS: ModelCatalog<typeof modelGroups, "anthropic"> =
+	flattenModelCatalog("anthropic", modelGroups);

@@ -4,5 +4,58 @@
 import values from "./data/cloudflare-ai-gateway.json" with { type: "json" };
 import { flattenModelCatalog, type ModelCatalog } from "../model-catalog.ts";
 
-export const CLOUDFLARE_AI_GATEWAY_MODELS: ModelCatalog<typeof values, "cloudflare-ai-gateway"> =
-	flattenModelCatalog("cloudflare-ai-gateway", values);
+type GeneratedModelGroups = {
+	"anthropic-messages": {
+		"claude-3-5-haiku": object;
+		"claude-3-haiku": object;
+		"claude-3-opus": object;
+		"claude-3-sonnet": object;
+		"claude-3.5-haiku": object;
+		"claude-3.5-sonnet": object;
+		"claude-fable-5": object;
+		"claude-haiku-4-5": object;
+		"claude-opus-4": object;
+		"claude-opus-4-1": object;
+		"claude-opus-4-5": object;
+		"claude-opus-4-6": object;
+		"claude-opus-4-7": object;
+		"claude-opus-4-8": object;
+		"claude-sonnet-4": object;
+		"claude-sonnet-4-5": object;
+		"claude-sonnet-4-6": object;
+		"claude-sonnet-5": object;
+	};
+	"openai-completions": {
+		"workers-ai/@cf/moonshotai/kimi-k2.5": object;
+		"workers-ai/@cf/moonshotai/kimi-k2.6": object;
+		"workers-ai/@cf/nvidia/nemotron-3-120b-a12b": object;
+		"workers-ai/@cf/zai-org/glm-4.7-flash": object;
+		"workers-ai/@cf/zai-org/glm-5.2": object;
+	};
+	"openai-responses": {
+		"gpt-4": object;
+		"gpt-4-turbo": object;
+		"gpt-4o": object;
+		"gpt-4o-mini": object;
+		"gpt-5.1": object;
+		"gpt-5.1-codex": object;
+		"gpt-5.2": object;
+		"gpt-5.2-codex": object;
+		"gpt-5.3-codex": object;
+		"gpt-5.4": object;
+		"gpt-5.5": object;
+		"gpt-5.6-luna": object;
+		"gpt-5.6-sol": object;
+		"gpt-5.6-terra": object;
+		"o1": object;
+		"o3": object;
+		"o3-mini": object;
+		"o3-pro": object;
+		"o4-mini": object;
+	};
+};
+
+const modelGroups = values as GeneratedModelGroups;
+
+export const CLOUDFLARE_AI_GATEWAY_MODELS: ModelCatalog<typeof modelGroups, "cloudflare-ai-gateway"> =
+	flattenModelCatalog("cloudflare-ai-gateway", modelGroups);

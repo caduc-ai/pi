@@ -3,6 +3,26 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+ensure_node_engine() {
+  local current_major
+  current_major="$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)"
+  if [[ "$current_major" -ge 22 ]]; then
+    return
+  fi
+
+  if [[ -s "$HOME/.nvm/nvm.sh" ]]; then
+    # shellcheck source=/dev/null
+    . "$HOME/.nvm/nvm.sh"
+    nvm use 24 >/dev/null
+    return
+  fi
+
+  echo "pi requires Node >=22.19.0; current node is $(node --version 2>/dev/null || echo missing)" >&2
+  exit 1
+}
+
+ensure_node_engine
+
 # Check for --no-env flag
 NO_ENV=false
 ARGS=()

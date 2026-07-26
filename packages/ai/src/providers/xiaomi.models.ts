@@ -4,5 +4,18 @@
 import values from "./data/xiaomi.json" with { type: "json" };
 import { flattenModelCatalog, type ModelCatalog } from "../model-catalog.ts";
 
-export const XIAOMI_MODELS: ModelCatalog<typeof values, "xiaomi"> =
-	flattenModelCatalog("xiaomi", values);
+type GeneratedModelGroups = {
+	"openai-completions": {
+		"mimo-v2-flash": object;
+		"mimo-v2-omni": object;
+		"mimo-v2-pro": object;
+		"mimo-v2.5": object;
+		"mimo-v2.5-pro": object;
+		"mimo-v2.5-pro-ultraspeed": object;
+	};
+};
+
+const modelGroups = values as GeneratedModelGroups;
+
+export const XIAOMI_MODELS: ModelCatalog<typeof modelGroups, "xiaomi"> =
+	flattenModelCatalog("xiaomi", modelGroups);

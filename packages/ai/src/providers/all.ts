@@ -43,6 +43,10 @@ import { xiaomiTokenPlanSgpProvider } from "./xiaomi-token-plan-sgp.ts";
 import { zaiProvider } from "./zai.ts";
 import { zaiCodingCnProvider } from "./zai-coding-cn.ts";
 
+type ModelDataManifest = {
+	generatedAt: string;
+};
+
 export { radiusProvider };
 
 /** Providers present in the generated catalog. `KnownProvider` additionally
@@ -70,7 +74,8 @@ export function getBuiltinProviders(): BuiltinProvider[] {
 
 /** Generation timestamp shared by all built-in provider catalogs. */
 export function getBuiltinModelDataGeneratedAt(): number | undefined {
-	const generatedAt = Date.parse(modelDataManifest.generatedAt);
+	const manifest = modelDataManifest as ModelDataManifest;
+	const generatedAt = Date.parse(manifest.generatedAt);
 	return Number.isNaN(generatedAt) ? undefined : generatedAt;
 }
 

@@ -4,5 +4,32 @@
 import values from "./data/opencode-go.json" with { type: "json" };
 import { flattenModelCatalog, type ModelCatalog } from "../model-catalog.ts";
 
-export const OPENCODE_GO_MODELS: ModelCatalog<typeof values, "opencode-go"> =
-	flattenModelCatalog("opencode-go", values);
+type GeneratedModelGroups = {
+	"anthropic-messages": {
+		"minimax-m3": object;
+		"qwen3.7-max": object;
+		"qwen3.7-plus": object;
+	};
+	"openai-completions": {
+		"deepseek-v4-flash": object;
+		"deepseek-v4-pro": object;
+		"glm-5.1": object;
+		"glm-5.2": object;
+		"hy3": object;
+		"kimi-k2.6": object;
+		"kimi-k2.7-code": object;
+		"kimi-k3": object;
+		"mimo-v2.5": object;
+		"mimo-v2.5-pro": object;
+		"minimax-m2.7": object;
+		"qwen3.6-plus": object;
+	};
+	"openai-responses": {
+		"grok-4.5": object;
+	};
+};
+
+const modelGroups = values as GeneratedModelGroups;
+
+export const OPENCODE_GO_MODELS: ModelCatalog<typeof modelGroups, "opencode-go"> =
+	flattenModelCatalog("opencode-go", modelGroups);

@@ -4,5 +4,15 @@
 import values from "./data/cerebras.json" with { type: "json" };
 import { flattenModelCatalog, type ModelCatalog } from "../model-catalog.ts";
 
-export const CEREBRAS_MODELS: ModelCatalog<typeof values, "cerebras"> =
-	flattenModelCatalog("cerebras", values);
+type GeneratedModelGroups = {
+	"openai-completions": {
+		"gemma-4-31b": object;
+		"gpt-oss-120b": object;
+		"zai-glm-4.7": object;
+	};
+};
+
+const modelGroups = values as GeneratedModelGroups;
+
+export const CEREBRAS_MODELS: ModelCatalog<typeof modelGroups, "cerebras"> =
+	flattenModelCatalog("cerebras", modelGroups);

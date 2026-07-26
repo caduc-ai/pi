@@ -4,5 +4,25 @@
 import values from "./data/cloudflare-workers-ai.json" with { type: "json" };
 import { flattenModelCatalog, type ModelCatalog } from "../model-catalog.ts";
 
-export const CLOUDFLARE_WORKERS_AI_MODELS: ModelCatalog<typeof values, "cloudflare-workers-ai"> =
-	flattenModelCatalog("cloudflare-workers-ai", values);
+type GeneratedModelGroups = {
+	"openai-completions": {
+		"@cf/google/gemma-4-26b-a4b-it": object;
+		"@cf/ibm-granite/granite-4.0-h-micro": object;
+		"@cf/meta/llama-3.3-70b-instruct-fp8-fast": object;
+		"@cf/meta/llama-4-scout-17b-16e-instruct": object;
+		"@cf/mistralai/mistral-small-3.1-24b-instruct": object;
+		"@cf/moonshotai/kimi-k2.6": object;
+		"@cf/moonshotai/kimi-k2.7-code": object;
+		"@cf/nvidia/nemotron-3-120b-a12b": object;
+		"@cf/openai/gpt-oss-120b": object;
+		"@cf/openai/gpt-oss-20b": object;
+		"@cf/qwen/qwen3-30b-a3b-fp8": object;
+		"@cf/zai-org/glm-4.7-flash": object;
+		"@cf/zai-org/glm-5.2": object;
+	};
+};
+
+const modelGroups = values as GeneratedModelGroups;
+
+export const CLOUDFLARE_WORKERS_AI_MODELS: ModelCatalog<typeof modelGroups, "cloudflare-workers-ai"> =
+	flattenModelCatalog("cloudflare-workers-ai", modelGroups);

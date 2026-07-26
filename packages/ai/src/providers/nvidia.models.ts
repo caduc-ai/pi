@@ -4,5 +4,30 @@
 import values from "./data/nvidia.json" with { type: "json" };
 import { flattenModelCatalog, type ModelCatalog } from "../model-catalog.ts";
 
-export const NVIDIA_MODELS: ModelCatalog<typeof values, "nvidia"> =
-	flattenModelCatalog("nvidia", values);
+type GeneratedModelGroups = {
+	"openai-completions": {
+		"meta/llama-3.1-70b-instruct": object;
+		"meta/llama-3.1-8b-instruct": object;
+		"meta/llama-3.2-11b-vision-instruct": object;
+		"meta/llama-3.2-90b-vision-instruct": object;
+		"meta/llama-3.3-70b-instruct": object;
+		"minimaxai/minimax-m3": object;
+		"mistralai/mistral-small-4-119b-2603": object;
+		"moonshotai/kimi-k2.6": object;
+		"nvidia/nemotron-3-nano-30b-a3b": object;
+		"nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": object;
+		"nvidia/nemotron-3-super-120b-a12b": object;
+		"nvidia/nemotron-3-ultra-550b-a55b": object;
+		"nvidia/nvidia-nemotron-nano-9b-v2": object;
+		"openai/gpt-oss-120b": object;
+		"openai/gpt-oss-20b": object;
+		"stepfun-ai/step-3.5-flash": object;
+		"stepfun-ai/step-3.7-flash": object;
+		"z-ai/glm-5.2": object;
+	};
+};
+
+const modelGroups = values as GeneratedModelGroups;
+
+export const NVIDIA_MODELS: ModelCatalog<typeof modelGroups, "nvidia"> =
+	flattenModelCatalog("nvidia", modelGroups);
