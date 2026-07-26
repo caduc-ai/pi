@@ -4,7 +4,8 @@ import { Editor } from "./components/editor.tsx";
 import { Footer } from "./components/footer.tsx";
 import { MarkdownView } from "./components/markdown-view.tsx";
 import { ForkPicker, ModelPicker } from "./components/pickers.tsx";
-import { commandResult, connected, sessionState, widgets } from "./state.ts";
+import { TerminalView } from "./components/terminal.tsx";
+import { commandResult, connected, sessionState, terminalOpen, widgets } from "./state.ts";
 
 function Header() {
 	const name = sessionState.value?.sessionName;
@@ -19,6 +20,16 @@ function Header() {
 				</svg>
 			</a>
 			<span class="header-title">{name ? `pi — ${name}` : "pi"}</span>
+			<button
+				type="button"
+				class={`header-terminal ${terminalOpen.value ? "active" : ""}`}
+				title="Toggle terminal"
+				onClick={() => {
+					terminalOpen.value = !terminalOpen.value;
+				}}
+			>
+				{">_"}
+			</button>
 			<span
 				class={`connection-dot ${isConnected ? "online" : "offline"}`}
 				title={isConnected ? "Connected" : "Disconnected"}
@@ -69,6 +80,7 @@ export function App() {
 		<div class="app">
 			<Header />
 			<ChatList />
+			<TerminalView />
 			<CommandResultCard />
 			<WidgetArea placement="aboveEditor" />
 			<Editor />

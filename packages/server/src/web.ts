@@ -142,7 +142,7 @@ function renderIndexPage(): string {
 					.map(
 						(instance) =>
 							`<li><a href="/i/${escapeHtml(instance.id)}/">${escapeHtml(instance.label ?? instance.cwd)}</a> ` +
-							`<a class="meta" href="/review?cwd=${encodeURIComponent(instance.cwd)}">review</a></li>`,
+							`<a class="meta" href="/review?cwd=${encodeURIComponent(instance.cwd)}&start=1">review</a></li>`,
 					)
 					.join("\n");
 	return `<!doctype html>
@@ -186,7 +186,6 @@ function renderIndexPage(): string {
 </head>
 <body>
 	<h1>pi</h1>
-	<p class="nav"><a href="/terminal">Terminal</a></p>
 	<h2 style="font-size:1em;margin-top:1.5em">Active sessions</h2>
 	<ul>
 ${items}
@@ -359,9 +358,10 @@ function renderReviewPage(): string {
 
 	<div class="panel hidden" id="panel-start">
 		<h2>Start review</h2>
+		<div class="status" style="margin-bottom:0.7em">Leave Base and Head empty to use the current branch's GitHub PR. If no PR exists, pi will create one for the current branch.</div>
 		<div class="row">
-			<label>Base <input id="start-base" value="main" /></label>
-			<label>Head <input id="start-head" value="HEAD" /></label>
+			<label>Base <input id="start-base" placeholder="current branch PR" /></label>
+			<label>Head <input id="start-head" placeholder="current branch PR" /></label>
 			<label>Repo <input id="start-repo" placeholder="(cwd)" /></label>
 			<button onclick="startReview()">Start</button>
 		</div>
@@ -396,6 +396,7 @@ function renderReviewPage(): string {
 		const activePanel = document.getElementById("panel-active");
 		const params = new URLSearchParams(location.search);
 		const repoCwd = params.get("cwd") || "";
+		let autoStartReview = params.get("start") === "1";
 		if (repoCwd) {
 			document.getElementById("review-cwd").textContent = repoCwd;
 			document.getElementById("start-repo").value = repoCwd;
@@ -404,10 +405,15 @@ function renderReviewPage(): string {
 		let currentFile = null;
 		let currentFingerprint = null;
 
+		function selectedRepo() {
+			return document.getElementById("start-repo").value.trim() || repoCwd;
+		}
+
 		async function api(method, url, body) {
-			if (repoCwd) url += (url.indexOf("?") === -1 ? "?" : "&") + "repo=" + encodeURIComponent(repoCwd);
+			const repo = selectedRepo();
+			if (repo) url += (url.indexOf("?") === -1 ? "?" : "&") + "repo=" + encodeURIComponent(repo);
 			const opts = { method, headers: body != null ? { "Content-Type": "application/json" } : {} };
-			if (body != null) opts.body = JSON.stringify({ repo: repoCwd || undefined, ...body });
+			if (body != null) opts.body = JSON.stringify({ repo: repo || undefined, ...body });
 			const res = await fetch(url, opts);
 			return res.json();
 		}
@@ -418,6 +424,10 @@ function renderReviewPage(): string {
 				// No active review
 				startPanel.classList.remove("hidden");
 				activePanel.classList.add("hidden");
+				if (autoStartReview) {
+					autoStartReview = false;
+					await startReview();
+				}
 				return;
 			}
 			const r = data.data.result;
@@ -475,12 +485,17 @@ function renderReviewPage(): string {
 		}
 
 		async function startReview() {
-			const base = document.getElementById("start-base").value.trim() || "main";
-			const head = document.getElementById("start-head").value.trim() || "HEAD";
-			const repo = document.getElementById("start-repo").value.trim() || repoCwd;
+			const base = document.getElementById("start-base").value.trim();
+			const head = document.getElementById("start-head").value.trim();
+			const repo = selectedRepo();
 			const msg = document.getElementById("start-msg");
-			msg.textContent = "Starting…"; msg.className = "msg";
-			const data = await api("POST", "/api/review/start", { base, head, repo: repo || undefined });
+			msg.textContent = base || head ? "Starting…" : "Finding or creating PR…"; msg.className = "msg";
+			const data = await api("POST", "/api/review/start", {
+				base: base || undefined,
+				head: head || undefined,
+				repo: repo || undefined,
+				createPr: !base && !head,
+			});
 			if (!data.ok) {
 				msg.textContent = data.error || "Failed"; msg.className = "msg error";
 			} else {
@@ -766,8 +781,25 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 				body += chunk.toString();
 			});
 			request.on("end", () => {
-				const { base, head, repo } = JSON.parse(body) as { base: string; head: string; repo?: string };
-				const args = ["review", "start", "--base", base, "--head", head];
+				const { base, head, repo, createPr } = JSON.parse(body) as {
+					base?: string;
+					head?: string;
+					repo?: string;
+					createPr?: boolean;
+				};
+				const args = ["review", "start"];
+				if (base !== undefined || head !== undefined) {
+					if (base === undefined || head === undefined) {
+						response.writeHead(200, { "content-type": "application/json" });
+						response.end(
+							JSON.stringify({ ok: false, error: "Base and Head must both be set for a manual review" }),
+						);
+						return;
+					}
+					args.push("--base", base, "--head", head);
+				} else if (createPr) {
+					args.push("--create-pr");
+				}
 				if (repo) args.push("--repo", repo);
 				response.writeHead(200, { "content-type": "application/json" });
 				response.end(JSON.stringify(runCranium(args, { cwd: repo || undefined })));

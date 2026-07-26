@@ -204,7 +204,21 @@ export type RpcCommand =
 	| { id?: string; type: "get_last_assistant_text" }
 	| { id?: string; type: "get_fork_messages" }
 	| { id?: string; type: "fork"; entryId: string }
-	| { id?: string; type: "clone" };
+	| { id?: string; type: "clone" }
+	// Terminal: a persistent interactive shell, separate from the one-shot `bash`
+	// command. Payloads are base64-encoded raw terminal bytes.
+	| { id?: string; type: "terminal_open"; cols?: number; rows?: number }
+	| { id?: string; type: "terminal_input"; data: string }
+	| { id?: string; type: "terminal_resize"; cols: number; rows: number }
+	| { id?: string; type: "terminal_close" };
+
+export interface TerminalOpenData {
+	termId: string;
+	cols: number;
+	rows: number;
+	/** base64 scrollback replay so a reconnecting client sees a coherent screen */
+	replay: string;
+}
 
 export type RpcResponse =
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
@@ -237,6 +251,8 @@ export type AgentSessionEvent =
 	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
 	| { type: "message_end"; message: AgentMessage }
 	| { type: "bash_execution_update"; id?: string; delta: string }
+	| { type: "terminal_output"; data: string }
+	| { type: "terminal_exit"; reason?: string }
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: Record<string, unknown> }
 	| {
 			type: "tool_execution_update";

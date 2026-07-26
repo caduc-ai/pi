@@ -528,6 +528,93 @@ Response:
 {"type": "response", "command": "abort_bash", "success": true}
 ```
 
+### Terminal
+
+A persistent interactive shell, distinct from `bash` above:
+
+| | `bash` | `terminal_*` |
+| --- | --- | --- |
+| Shell lifetime | one process per command | one shell for the whole pi run |
+| `cd`, `export`, aliases | discarded after each command | persist |
+| Interactive programs (`vim`, `htop`) | no | yes (real tty) |
+| Recorded in session history | yes, as `bashExecution` | **no** |
+| Visible to the model | yes, on the next prompt | **no** |
+
+The terminal is backed by a tmux session named `pi-<pid>-<random>`, so it
+survives clients attaching and detaching and survives `switch_session`. It
+requires `tmux` on the host; `terminal_open` fails with an actionable error if
+tmux is missing.
+
+All payloads (`data`, `replay`) are base64-encoded raw terminal bytes, including
+ANSI escape sequences. Clients are expected to feed them to a terminal emulator.
+
+All clients share one terminal, like `tmux attach`. Because there is a single
+underlying window, size is last-writer-wins across clients.
+
+#### terminal_open
+
+Open (or re-attach to) the terminal. Idempotent: repeated calls return the same
+`termId`.
+
+```json
+{"type": "terminal_open", "cols": 100, "rows": 30}
+```
+
+Response:
+```json
+{"type": "response", "command": "terminal_open", "success": true,
+ "data": {"termId": "pi-12345-a1b2c3", "cols": 100, "rows": 30, "replay": "<base64>"}}
+```
+
+`replay` is the current screen plus recent scrollback, so a reconnecting client
+renders a coherent screen instead of a blank one.
+
+#### terminal_input
+
+Send raw bytes to the shell, as if typed. Control characters work: `"data"` of
+`"Aw=="` is `0x03` (Ctrl-C) and interrupts the foreground process without
+killing the shell.
+
+```json
+{"type": "terminal_input", "data": "ZWNobyBoaQo="}
+```
+
+Response:
+```json
+{"type": "response", "command": "terminal_input", "success": true}
+```
+
+Fails with `"No terminal is open"` if called before `terminal_open`.
+
+#### terminal_resize
+
+Resize the terminal. Propagates to the shell, so `stty size` and full-screen
+programs observe the new dimensions.
+
+```json
+{"type": "terminal_resize", "cols": 132, "rows": 43}
+```
+
+Response:
+```json
+{"type": "response", "command": "terminal_resize", "success": true}
+```
+
+#### terminal_close
+
+Kill the shell and its tmux session. A later `terminal_open` starts a fresh one.
+Hiding a terminal panel in a UI should **not** send this: the value of the
+terminal is that it keeps running.
+
+```json
+{"type": "terminal_close"}
+```
+
+Response:
+```json
+{"type": "response", "command": "terminal_close", "success": true}
+```
+
 ### Session
 
 #### get_session_stats
@@ -987,6 +1074,33 @@ Events stream all output while the command runs, even if the final `bash` respon
   "type": "bash_execution_update",
   "id": "req-1",
   "delta": "total 48\n"
+}
+```
+
+### terminal_output
+
+Emitted for each chunk of terminal output, broadcast to every attached client.
+`data` is base64-encoded raw bytes including ANSI escape sequences.
+
+Unlike `bash_execution_update`, this output is never added to session history and
+is never sent to the model.
+
+```json
+{
+  "type": "terminal_output",
+  "data": "aGkNCg=="
+}
+```
+
+### terminal_exit
+
+Emitted when the shell or its tmux session goes away (for example the user ran
+`exit`). Clients may call `terminal_open` again to start a new one.
+
+```json
+{
+  "type": "terminal_exit",
+  "reason": "control-client-exited"
 }
 ```
 

@@ -960,3 +960,101 @@ select.theme-toggle {
 		align-items: center;
 	}
 }
+
+/* ============================================================================
+   Terminal panel (persistent shell, separate from bash chat messages)
+   ========================================================================== */
+
+.header-terminal {
+	background: none;
+	border: 1px solid var(--pi-borderMuted);
+	border-radius: 4px;
+	color: var(--pi-muted);
+	cursor: pointer;
+	font-family: inherit;
+	font-size: 12px;
+	margin-left: auto;
+	padding: 2px 7px;
+}
+
+.header-terminal:hover {
+	color: var(--pi-text);
+}
+
+.header-terminal.active {
+	border-color: var(--pi-accent);
+	color: var(--pi-accent);
+}
+
+.terminal-panel {
+	background: var(--pi-cardBg);
+	border-top: 1px solid var(--pi-borderMuted);
+	display: flex;
+	flex-direction: column;
+	/* Roughly half the viewport, so the chat stays usable alongside it. */
+	height: 45vh;
+	min-height: 180px;
+}
+
+.terminal-header {
+	align-items: center;
+	border-bottom: 1px solid var(--pi-borderMuted);
+	display: flex;
+	flex: 0 0 auto;
+	justify-content: space-between;
+	padding: 4px 10px;
+}
+
+.terminal-title {
+	color: var(--pi-muted);
+	font-size: 12px;
+}
+
+.terminal-close {
+	background: none;
+	border: none;
+	color: var(--pi-muted);
+	cursor: pointer;
+	font-size: 16px;
+	line-height: 1;
+	padding: 0 4px;
+}
+
+.terminal-close:hover {
+	color: var(--pi-text);
+}
+
+.terminal-host {
+	flex: 1 1 auto;
+	min-height: 0;
+	padding: 4px 6px;
+}
+
+/* Keys a touch keyboard cannot send; hidden where a physical keyboard is likely. */
+.terminal-keys {
+	display: none;
+}
+
+@media (max-width: 820px) {
+	.terminal-keys {
+		border-top: 1px solid var(--pi-borderMuted);
+		display: flex;
+		flex: 0 0 auto;
+		gap: 4px;
+		overflow-x: auto;
+		padding: 5px 6px;
+	}
+
+	.terminal-key {
+		background: var(--pi-selectedBg);
+		border: 1px solid var(--pi-borderMuted);
+		border-radius: 4px;
+		color: var(--pi-text);
+		cursor: pointer;
+		flex: 0 0 auto;
+		font-family: inherit;
+		font-size: 13px;
+		min-width: 38px;
+		padding: 6px 9px;
+	}
+}

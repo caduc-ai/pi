@@ -19,6 +19,12 @@ import type {
 	ExtensionWidgetOptions,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
+import {
+	disposeTerminal,
+	getExistingTerminal,
+	getOrCreateTerminal,
+	type TmuxTerminal,
+} from "../../core/terminal/index.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import {
 	RPC_BUILTIN_COMMANDS,
@@ -81,6 +87,11 @@ export class RpcBridge {
 	>();
 	private unsubscribe: (() => void) | undefined;
 	private unsubscribeBackpressure: (() => void) | undefined;
+	/**
+	 * Terminal output subscription. The terminal itself is process-scoped and
+	 * deliberately outside the session graph, so rebindSession() must not touch it.
+	 */
+	private unsubscribeTerminal: (() => void) | undefined;
 
 	private readonly options: RpcBridgeOptions;
 
@@ -107,7 +118,32 @@ export class RpcBridge {
 	async dispose(): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribeBackpressure?.();
+		this.unsubscribeTerminal?.();
+		this.unsubscribeTerminal = undefined;
 		this.clients.clear();
+		// The terminal is scoped to the pi run; a graceful shutdown ends it so a
+		// tmux session is not leaked per run.
+		await disposeTerminal();
+	}
+
+	/**
+	 * Stream terminal output to all clients. Attached once per terminal, not per
+	 * client: every client shares the one terminal, like `tmux attach`.
+	 */
+	private attachTerminalStream(terminal: TmuxTerminal): void {
+		if (this.unsubscribeTerminal) return;
+		const unsubscribeOutput = terminal.subscribe((data) => {
+			this.broadcast({ type: "terminal_output", data: data.toString("base64") });
+		});
+		const unsubscribeExit = terminal.onExit((reason) => {
+			this.broadcast({ type: "terminal_exit", reason });
+			this.unsubscribeTerminal?.();
+			this.unsubscribeTerminal = undefined;
+		});
+		this.unsubscribeTerminal = () => {
+			unsubscribeOutput();
+			unsubscribeExit();
+		};
 	}
 
 	attachClient(connection: RpcClientConnection): RpcClientHandle {
@@ -645,6 +681,65 @@ export class RpcBridge {
 			case "abort_bash": {
 				session.abortBash();
 				return success(id, "abort_bash");
+			}
+
+			// =================================================================
+			// Terminal
+			//
+			// A persistent interactive shell, separate from `bash` above: it keeps
+			// cwd, environment and running processes across commands, and its output
+			// never enters session history or the model's context.
+			// =================================================================
+
+			case "terminal_open": {
+				try {
+					const terminal = await getOrCreateTerminal({
+						cwd: session.sessionManager.getCwd(),
+						cols: command.cols,
+						rows: command.rows,
+					});
+					// Resize to this client's viewport; last writer wins across clients.
+					if (command.cols !== undefined && command.rows !== undefined) {
+						await terminal.resize(command.cols, command.rows);
+					}
+					this.attachTerminalStream(terminal);
+					// Replay scrollback so a reconnecting client sees a coherent screen.
+					const replay = await terminal.captureReplay();
+					const { cols, rows } = terminal.size;
+					return success(id, "terminal_open", {
+						termId: terminal.id,
+						cols,
+						rows,
+						replay: Buffer.from(replay, "utf8").toString("base64"),
+					});
+				} catch (e) {
+					return error(id, "terminal_open", e instanceof Error ? e.message : String(e));
+				}
+			}
+
+			case "terminal_input": {
+				const terminal = getExistingTerminal();
+				if (!terminal) {
+					return error(id, "terminal_input", "No terminal is open");
+				}
+				await terminal.write(Buffer.from(command.data, "base64"));
+				return success(id, "terminal_input");
+			}
+
+			case "terminal_resize": {
+				const terminal = getExistingTerminal();
+				if (!terminal) {
+					return error(id, "terminal_resize", "No terminal is open");
+				}
+				await terminal.resize(command.cols, command.rows);
+				return success(id, "terminal_resize");
+			}
+
+			case "terminal_close": {
+				this.unsubscribeTerminal?.();
+				this.unsubscribeTerminal = undefined;
+				await disposeTerminal();
+				return success(id, "terminal_close");
 			}
 
 			// =================================================================

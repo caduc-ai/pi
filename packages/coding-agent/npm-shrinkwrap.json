@@ -9,11 +9,13 @@
 			"version": "0.82.1",
 			"license": "MIT",
 			"dependencies": {
+				"@anthropic-ai/claude-agent-sdk": "0.3.220",
 				"@earendil-works/pi-agent-core": "^0.82.1",
 				"@earendil-works/pi-ai": "^0.82.1",
 				"@earendil-works/pi-tui": "^0.82.1",
 				"@earendil-works/pi-web": "^0.82.1",
 				"@silvia-odwyer/photon-node": "0.3.4",
+				"cc-session-io": "0.3.1",
 				"chalk": "5.6.2",
 				"cross-spawn": "7.0.6",
 				"diff": "8.0.4",
@@ -29,7 +31,8 @@
 				"typebox": "1.1.38",
 				"undici": "8.5.0",
 				"ws": "8.21.1",
-				"yaml": "2.9.0"
+				"yaml": "2.9.0",
+				"zod": "4.3.6"
 			},
 			"optionalDependencies": {
 				"@mariozechner/clipboard": "0.3.9"
@@ -40,6 +43,122 @@
 			"engines": {
 				"node": ">=22.19.0"
 			}
+		},
+		"node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64": {
+			"version": "0.3.220",
+			"resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-arm64/-/claude-agent-sdk-darwin-arm64-0.3.220.tgz",
+			"integrity": "sha512-7VxlbEosK7DODiOnsjoVd0DSJzbnaPrM2jelMHI0y8zx1UnLS3WC6EFUXbvy74F2sXqEznh2tzn7EKWInaRN6Q==",
+			"license": "SEE LICENSE IN LICENSE.md",
+			"os": [
+				"darwin"
+			],
+			"cpu": [
+				"arm64"
+			],
+			"optional": true
+		},
+		"node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64": {
+			"version": "0.3.220",
+			"resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-x64/-/claude-agent-sdk-darwin-x64-0.3.220.tgz",
+			"integrity": "sha512-X9RwDsSmbF6ultKZroaip+DL8WRgC64gHbrAwrRlAFSPNZV7zmJyP2ur8rW7KrxqmtuehdMMkw8+SAC/6hD2PA==",
+			"license": "SEE LICENSE IN LICENSE.md",
+			"os": [
+				"darwin"
+			],
+			"cpu": [
+				"x64"
+			],
+			"optional": true
+		},
+		"node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64": {
+			"version": "0.3.220",
+			"resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64/-/claude-agent-sdk-linux-arm64-0.3.220.tgz",
+			"integrity": "sha512-WkROPwWskqhKR9XgnmseHQ6rLi9zM9qt57IWoToIjL/eXOqDWipp7JXZ1L5ud+LrA42dunHPZfBwD/vXZ+A7LA==",
+			"license": "SEE LICENSE IN LICENSE.md",
+			"os": [
+				"linux"
+			],
+			"cpu": [
+				"arm64"
+			],
+			"libc": [
+				"glibc"
+			],
+			"optional": true
+		},
+		"node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64-musl": {
+			"version": "0.3.220",
+			"resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64-musl/-/claude-agent-sdk-linux-arm64-musl-0.3.220.tgz",
+			"integrity": "sha512-OHoZOZ8Cf2TBr6oXIXPwyvUxj9jrq2w8E4poA8dMpacXszcPSPiCQCMuuOh4aWJzfeJE1+TtWxhKMVb2csXyZQ==",
+			"license": "SEE LICENSE IN LICENSE.md",
+			"os": [
+				"linux"
+			],
+			"cpu": [
+				"arm64"
+			],
+			"libc": [
+				"musl"
+			],
+			"optional": true
+		},
+		"node_modules/@anthropic-ai/claude-agent-sdk-linux-x64": {
+			"version": "0.3.220",
+			"resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64/-/claude-agent-sdk-linux-x64-0.3.220.tgz",
+			"integrity": "sha512-tkTJFnpR9VifvWX2fmkCAPkT6+8Wk/gVu8B5jsVekKZPiZoWRHmMXO30BnZn+f0TZhgYP+82PSX3S8crH1kn+w==",
+			"license": "SEE LICENSE IN LICENSE.md",
+			"os": [
+				"linux"
+			],
+			"cpu": [
+				"x64"
+			],
+			"libc": [
+				"glibc"
+			],
+			"optional": true
+		},
+		"node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl": {
+			"version": "0.3.220",
+			"resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64-musl/-/claude-agent-sdk-linux-x64-musl-0.3.220.tgz",
+			"integrity": "sha512-K+FWj+LcGhC1Z7wqeWoLxm1iemcba5xKpLLFVwYm4V6HyMx3ruYd/2r2TiQtjT+JWeNFWIys0ScHiItR6vWAiA==",
+			"license": "SEE LICENSE IN LICENSE.md",
+			"os": [
+				"linux"
+			],
+			"cpu": [
+				"x64"
+			],
+			"libc": [
+				"musl"
+			],
+			"optional": true
+		},
+		"node_modules/@anthropic-ai/claude-agent-sdk-win32-arm64": {
+			"version": "0.3.220",
+			"resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-arm64/-/claude-agent-sdk-win32-arm64-0.3.220.tgz",
+			"integrity": "sha512-rIwgq0UwQExWl6KrHUyC4w5KwpL9l6nd95aUTx6RitexaAuEw//xtfTVLnuE4hDDQZFkzEwpdKc3nxDWoGcUbA==",
+			"license": "SEE LICENSE IN LICENSE.md",
+			"os": [
+				"win32"
+			],
+			"cpu": [
+				"arm64"
+			],
+			"optional": true
+		},
+		"node_modules/@anthropic-ai/claude-agent-sdk-win32-x64": {
+			"version": "0.3.220",
+			"resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-x64/-/claude-agent-sdk-win32-x64-0.3.220.tgz",
+			"integrity": "sha512-MuOuXhbr66HlGaWXD2f3w0k2PsvmnbkwcUZ0dAe2poFLdl72GC2dapwwOBefxm9QmoNqk9+jmv/dSKGOVWyvLw==",
+			"license": "SEE LICENSE IN LICENSE.md",
+			"os": [
+				"win32"
+			],
+			"cpu": [
+				"x64"
+			],
+			"optional": true
 		},
 		"node_modules/@anthropic-ai/sdk": {
 			"version": "0.91.1",
@@ -533,6 +652,8 @@
 			"license": "MIT",
 			"dependencies": {
 				"@preact/signals": "2.10.0",
+				"@xterm/addon-fit": "0.11.0",
+				"@xterm/xterm": "6.0.0",
 				"diff": "8.0.4",
 				"dompurify": "3.4.12",
 				"highlight.js": "10.7.3",
@@ -1018,6 +1139,21 @@
 			"license": "MIT",
 			"optional": true
 		},
+		"node_modules/@xterm/addon-fit": {
+			"version": "0.11.0",
+			"resolved": "https://registry.npmjs.org/@xterm/addon-fit/-/addon-fit-0.11.0.tgz",
+			"integrity": "sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==",
+			"license": "MIT"
+		},
+		"node_modules/@xterm/xterm": {
+			"version": "6.0.0",
+			"resolved": "https://registry.npmjs.org/@xterm/xterm/-/xterm-6.0.0.tgz",
+			"integrity": "sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==",
+			"license": "MIT",
+			"workspaces": [
+				"addons/*"
+			]
+		},
 		"node_modules/agent-base": {
 			"version": "7.1.4",
 			"resolved": "https://registry.npmjs.org/agent-base/-/agent-base-7.1.4.tgz",
@@ -1088,6 +1224,18 @@
 			"resolved": "https://registry.npmjs.org/buffer-equal-constant-time/-/buffer-equal-constant-time-1.0.1.tgz",
 			"integrity": "sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07OIx0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA==",
 			"license": "BSD-3-Clause"
+		},
+		"node_modules/cc-session-io": {
+			"version": "0.3.1",
+			"resolved": "https://registry.npmjs.org/cc-session-io/-/cc-session-io-0.3.1.tgz",
+			"integrity": "sha512-FPswREdPLqetYkmdUTF36NVGzjyrhUJ8PzP9wLraoL/54q9Q72dHC8PCc/OhF/bH3n0M5iO/2SRGfMwZZZaDgQ==",
+			"license": "MIT",
+			"bin": {
+				"cc-session": "dist/cli.js"
+			},
+			"engines": {
+				"node": ">=20"
+			}
 		},
 		"node_modules/chalk": {
 			"version": "5.6.2",
@@ -1886,9 +2034,9 @@
 			}
 		},
 		"node_modules/zod": {
-			"version": "3.25.76",
-			"resolved": "https://registry.npmjs.org/zod/-/zod-3.25.76.tgz",
-			"integrity": "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==",
+			"version": "4.3.6",
+			"resolved": "https://registry.npmjs.org/zod/-/zod-4.3.6.tgz",
+			"integrity": "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==",
 			"license": "MIT",
 			"funding": {
 				"url": "https://github.com/sponsors/colinhacks"
@@ -1901,6 +2049,30 @@
 			"license": "ISC",
 			"peerDependencies": {
 				"zod": "^3.25.28 || ^4"
+			}
+		},
+		"packages/coding-agent/node_modules/@anthropic-ai/claude-agent-sdk": {
+			"version": "0.3.220",
+			"resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.220.tgz",
+			"integrity": "sha512-glc7SdwPkOkLw8oxwLo9PKTdLJGqW/PIR4urWXFoRtX9YllwozsEVc5Tc1+EvLSkfrsxPJqQWqOgpjUOQXf1oA==",
+			"license": "SEE LICENSE IN README.md",
+			"optionalDependencies": {
+				"@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.220",
+				"@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.220",
+				"@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.220",
+				"@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "0.3.220",
+				"@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.220",
+				"@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.3.220",
+				"@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.220",
+				"@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.220"
+			},
+			"peerDependencies": {
+				"@anthropic-ai/sdk": ">=0.93.0",
+				"@modelcontextprotocol/sdk": "^1.29.0",
+				"zod": "^4.0.0"
+			},
+			"engines": {
+				"node": ">=18.0.0"
 			}
 		}
 	}
