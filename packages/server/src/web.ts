@@ -22,8 +22,8 @@ import {
 	getWebDistDir,
 	type RpcCommand,
 	type RpcExtensionUIResponse,
+	SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { SessionManager } from "@earendil-works/pi-coding-agent/dist/core/session-manager.js";
 import { WebSocketServer } from "ws";
 import { supervisor } from "./supervisor.ts";
 
@@ -172,6 +172,11 @@ function renderIndexPage(): string {
 		.spawn-result { margin-top: 0.5em; font-size: 0.9em; }
 		.spawn-result.error { color: #e06060; }
 		.spawn-result.success { color: #60c060; }
+		.past-item { display: flex; justify-content: space-between; align-items: center; padding: 0.4em 0; gap: 8px; }
+		.past-item + .past-item { border-top: 1px solid #1a1a1a; }
+		.past-item span { font-size: 0.9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.past-item button { font-family: inherit; font-size: 0.85em; background: #1a1a1a; color: #8abeb7; border: 1px solid #333; padding: 4px 10px; border-radius: 3px; cursor: pointer; white-space: nowrap; flex-shrink: 0; min-height: 34px; }
+		.past-item button:hover { background: #2a2a2a; }
 		@media (max-width: 600px) {
 			body { padding: 10px; }
 			.spawn-form input { max-width: none; }
@@ -181,11 +186,13 @@ function renderIndexPage(): string {
 </head>
 <body>
 	<h1>pi</h1>
-	<p class="nav"><a href="/review">Code review</a> <a href="/terminal">Terminal</a></p>
-	<h2 style="font-size:1em;margin-top:1.5em">Sessions</h2>
+	<p class="nav"><a href="/terminal">Terminal</a></p>
+	<h2 style="font-size:1em;margin-top:1.5em">Active sessions</h2>
 	<ul>
 ${items}
 	</ul>
+	<h2 style="font-size:1em;margin-top:1.5em">Past sessions <span style="font-weight:400;color:#666;font-size:0.9em" id="past-cwd"></span></h2>
+	<div id="past-list"><span class="meta">Loading…</span></div>
 	<div class="spawn-form">
 		<h2>New session</h2>
 		<form method="POST" action="/api/spawn" onsubmit="spawnSession(event)">
@@ -461,6 +468,71 @@ function renderReviewPage(): string {
 
 		loadStatus();
 	</script>
+			resultEl.textContent = "Error: " + error.message;
+			resultEl.className = "spawn-result error";
+		}
+	}
+
+	function loadPastSessions() {
+		function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+		var cwdInput = document.getElementById("spawn-cwd");
+		var label = document.getElementById("past-cwd");
+		var list = document.getElementById("past-list");
+		async function refresh() {
+			var cwd = cwdInput.value.trim() || ".";
+			try {
+				var res = await fetch("/api/sessions?cwd=" + encodeURIComponent(cwd));
+				var data = await res.json();
+				if (!data.ok || !data.sessions || data.sessions.length === 0) {
+					label.textContent = "";
+					list.innerHTML = '<span class="meta">No past sessions</span>';
+					return;
+				}
+				label.textContent = "(" + data.sessions.length + ")";
+				list.innerHTML = data.sessions.map(function(s) {
+					var name = s.name || s.firstMessage || s.id.slice(0, 8);
+					var date = new Date(s.modified).toLocaleDateString();
+					return '<div class="past-item">' +
+						'<span>' + esc(name) + ' <span class="meta">' + s.messageCount + ' msgs \u00b7 ' + date + '</span></span>' +
+						'<button onclick="resumeSession('' + esc(s.path) + '', '' + esc(s.cwd || cwd) + '', '' + esc(name) + '')">Resume</button>' +
+						'</div>';
+				}).join("");
+			} catch (_err) {
+				list.innerHTML = '<span class="meta error">Failed to load</span>';
+			}
+		}
+		cwdInput.addEventListener("change", refresh);
+		cwdInput.addEventListener("blur", refresh);
+		refresh();
+	}
+
+	async function resumeSession(path, cwd, name) {
+		var resultEl = document.getElementById("spawn-result");
+		resultEl.textContent = "Resuming\u2026";
+		resultEl.className = "spawn-result";
+		try {
+			var res = await fetch("/api/spawn", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ cwd: cwd, label: name || undefined, sessionFile: path }),
+			});
+			var data = await res.json();
+			if (data.ok && data.instance) {
+				resultEl.textContent = "Resumed! Opening\u2026";
+				resultEl.className = "spawn-result success";
+				window.location.href = "/i/" + data.instance.id + "/";
+			} else {
+				resultEl.textContent = "Error: " + (data.error || "unknown");
+				resultEl.className = "spawn-result error";
+			}
+		} catch (error) {
+			resultEl.textContent = "Error: " + error.message;
+			resultEl.className = "spawn-result error";
+		}
+	}
+
+	loadPastSessions();
+	</script>
 </body>
 </html>`;
 }
@@ -624,27 +696,28 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 
 		// GET /api/sessions?cwd=<path> — list past sessions
 		if (request.method === "GET" && url.pathname === "/api/sessions") {
-			const cwd = url.searchParams.get("cwd") || process.cwd();
 			response.writeHead(200, { "content-type": "application/json" });
-			try {
-				const sessions = await SessionManager.list(cwd);
-				response.end(
-					JSON.stringify({
-						ok: true,
-						sessions: sessions.map((s) => ({
-							id: s.id,
-							path: s.path,
-							cwd: s.cwd,
-							name: s.name,
-							messageCount: s.messageCount,
-							firstMessage: s.firstMessage,
-							modified: s.modified,
-						})),
-					}),
-				);
-			} catch (error: unknown) {
-				response.end(JSON.stringify({ ok: false, error: String(error) }));
-			}
+			const cwd = url.searchParams.get("cwd") || process.cwd();
+			SessionManager.list(cwd)
+				.then((sessions: Awaited<ReturnType<typeof SessionManager.list>>) => {
+					response.end(
+						JSON.stringify({
+							ok: true,
+							sessions: sessions.map((s: (typeof sessions)[number]) => ({
+								id: s.id,
+								path: s.path,
+								cwd: s.cwd,
+								name: s.name,
+								messageCount: s.messageCount,
+								firstMessage: s.firstMessage,
+								modified: s.modified,
+							})),
+						}),
+					);
+				})
+				.catch((error: unknown) => {
+					response.end(JSON.stringify({ ok: false, error: String(error) }));
+				});
 			return;
 		}
 		// Terminal API
