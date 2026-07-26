@@ -240,6 +240,8 @@ function renderReviewPage(): string {
 		header a { color: #8abeb7; text-decoration: none; font-weight: 500; }
 		header a:hover { color: #a0d8cf; }
 		header .sep { color: #555; }
+		header .home-btn { display: inline-flex; align-items: center; padding: 4px 6px; border-radius: 4px; color: #999; }
+		header .home-btn:hover { color: #e6e6e6; background: #1a1a1a; }
 		.panel { background: #141414; border: 1px solid #2a2a2a; border-radius: 6px; padding: 1em; margin-bottom: 1em; }
 		.panel h2 { font-size: 1em; margin: 0 0 0.6em 0; color: #999; }
 		label { display: block; margin: 0.3em 0; font-size: 0.9em; color: #999; }
@@ -274,7 +276,10 @@ function renderReviewPage(): string {
 </head>
 <body>
 	<header>
-		<a href="/">pi</a> <span class="sep">/</span> review
+		<a href="/" class="home-btn" title="Home">
+			<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><title>Home</title><path d="M2 6l6-4 6 4v8H2V6z" stroke="currentColor" stroke-width="1.2" fill="none" /><rect x="6" y="9" width="4" height="5" stroke="currentColor" stroke-width="1.2" fill="none" /></svg>
+		</a>
+		<span class="sep">/</span> review
 	</header>
 
 	<div class="panel hidden" id="panel-start">
@@ -462,6 +467,8 @@ function renderTerminalPage(): string {
 		header a { color: #8abeb7; text-decoration: none; font-weight: 500; }
 		header a:hover { color: #a0d8cf; }
 		header .sep { color: #555; }
+		header .home-btn { display: inline-flex; align-items: center; padding: 6px 6px; border-radius: 4px; color: #999; }
+		header .home-btn:hover { color: #e6e6e6; background: #1a1a1a; }
 		header .cwd-wrap { flex: 1; text-align: right; }
 		header input { font-family: inherit; font-size: 13px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 6px 8px; border-radius: 4px; width: 160px; }
 		#output { flex: 1; overflow-y: auto; padding: 12px; font-size: 0.85em; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
@@ -479,7 +486,10 @@ function renderTerminalPage(): string {
 </head>
 <body>
 	<header>
-		<a href="/">pi</a> <span class="sep">/</span> terminal
+		<a href="/" class="home-btn" title="Home">
+			<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><title>Home</title><path d="M2 6l6-4 6 4v8H2V6z" stroke="currentColor" stroke-width="1.2" fill="none" /><rect x="6" y="9" width="4" height="5" stroke="currentColor" stroke-width="1.2" fill="none" /></svg>
+		</a>
+		<span class="sep">/</span> terminal
 		<span class="cwd-wrap"><input id="cwd" placeholder="cwd" title="Working directory" value="${escapeHtml(process.cwd())}" /></span>
 	</header>
 	<div id="output"></div>
