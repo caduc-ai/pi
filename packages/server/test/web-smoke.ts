@@ -70,6 +70,32 @@ async function fetchPage(path: string): Promise<string> {
 	return res.text();
 }
 
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+
+/** Extract all JS from <script> blocks and validate with node --check */
+function jsSyntaxValid(html: string): string | null {
+	const scriptRegex = /<script>([\s\S]*?)<\/script>/g;
+	let match: RegExpExecArray | null = scriptRegex.exec(html);
+	let idx = 0;
+	while (match !== null) {
+		idx++;
+		const js = match[1]!;
+		// Write to temp file and check syntax
+		const tmpFile = resolve(tmpdir(), `smoke-test-script-${idx}.js`);
+		try {
+			writeFileSync(tmpFile, js);
+			execFileSync(process.execPath, ["--check", tmpFile], { encoding: "utf-8" });
+		} catch (err) {
+			const msg = (err as { stderr?: string }).stderr || String(err);
+			return `Script block #${idx} syntax error: ${msg.slice(0, 300)}`;
+		}
+		match = scriptRegex.exec(html);
+	}
+	return null;
+}
+
 function cssBracesBalanced(html: string): boolean {
 	const styleRegex = /<style>([\s\S]*?)<\/style>/g;
 	let match: RegExpExecArray | null = styleRegex.exec(html);
@@ -112,6 +138,10 @@ try {
 	if (cssBracesBalanced(indexHtml)) pass("index: CSS braces balanced");
 	else fail("index: CSS braces unbalanced");
 
+	const indexJsError = jsSyntaxValid(indexHtml);
+	if (indexJsError === null) pass("index: JS syntax valid");
+	else fail(`index: ${indexJsError}`);
+
 	// ---- Terminal page tests ----
 	const terminalHtml = await fetchPage("/terminal");
 
@@ -133,6 +163,10 @@ try {
 	if (terminalHtml.includes("home-btn")) pass("terminal: home button present");
 	else fail("terminal: home button missing");
 
+	const terminalJsError = jsSyntaxValid(terminalHtml);
+	if (terminalJsError === null) pass("terminal: JS syntax valid");
+	else fail(`terminal: ${terminalJsError}`);
+
 	// ---- Review page tests ----
 	const reviewHtml = await fetchPage("/review");
 
@@ -147,6 +181,10 @@ try {
 
 	if (reviewHtml.includes("home-btn")) pass("review: home button present");
 	else fail("review: home button missing");
+
+	const reviewJsError = jsSyntaxValid(reviewHtml);
+	if (reviewJsError === null) pass("review: JS syntax valid");
+	else fail(`review: ${reviewJsError}`);
 
 	// ---- API tests ----
 	const sessionsRes = await fetch(`${serverUrl}/api/sessions?cwd=.`);

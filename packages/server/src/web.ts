@@ -254,7 +254,10 @@ ${items}
 					return '<div class="past-item">' +
 					'<span>' + esc(name) + ' <span class="meta">' + s.messageCount + ' msgs \u00b7 ' + date + '</span></span>' +
 					'<button data-session-path="' + esc(s.path) + '" data-session-cwd="' + esc(s.cwd || cwd) + '" data-session-name="' + esc(name) + '" onclick="resumeClick(this)">Resume</button>' +
-					'</div>';n class="meta error">Failed to load</span>';
+					'</div>';
+				}).join("");
+			} catch (_err) {
+				list.innerHTML = '<span class="meta error">Failed to load sessions</span>';
 			}
 		}
 		cwdInput.addEventListener("change", refresh);
