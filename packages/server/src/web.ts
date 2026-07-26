@@ -148,27 +148,36 @@ function renderIndexPage(): string {
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<title>pi server</title>
 	<style>
-		body { font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 2em; }
+		*, *::before, *::after { box-sizing: border-box; }
+		body { font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 0; padding: 16px; }
 		h1 { font-size: 1.2em; margin-bottom: 1em; }
-		ul { list-style: none; padding: 0; }
-		li { margin: 0.6em 0; }
+		h2 { font-size: 1em; }
 		a { color: #8abeb7; }
+		.nav { margin-bottom: 1.5em; font-size: 0.95em; }
+		.nav a { margin-right: 12px; }
+		ul { list-style: none; padding: 0; }
+		li { margin: 0.6em 0; word-break: break-all; }
 		.meta { color: #666; font-size: 0.85em; margin-left: 0.5em; }
 		.spawn-form { margin-top: 2em; padding-top: 1.5em; border-top: 1px solid #333; }
 		.spawn-form h2 { font-size: 1em; margin-bottom: 0.5em; }
 		.spawn-form label { display: block; margin: 0.4em 0; font-size: 0.9em; color: #999; }
-		.spawn-form input, .spawn-form button { font-family: inherit; font-size: 0.9em; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 0.4em 0.6em; border-radius: 3px; }
-		.spawn-form input { width: 300px; }
-		.spawn-form button { cursor: pointer; background: #2a4a3f; border-color: #3a6a5f; margin-top: 0.5em; }
+		.spawn-form input, .spawn-form button { font-family: inherit; font-size: 15px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 10px 12px; border-radius: 4px; }
+		.spawn-form input { width: 100%; max-width: 320px; }
+		.spawn-form button { cursor: pointer; background: #2a4a3f; border-color: #3a6a5f; margin-top: 0.8em; min-height: 44px; }
 		.spawn-form button:hover { background: #3a6a5f; }
 		.spawn-result { margin-top: 0.5em; font-size: 0.9em; }
 		.spawn-result.error { color: #e06060; }
 		.spawn-result.success { color: #60c060; }
+		@media (max-width: 600px) {
+			body { padding: 10px; }
+			.spawn-form input { max-width: none; }
+			.spawn-form button { width: 100%; }
+		}
 	</style>
 </head>
 <body>
-	<h1>pi server</h1>
-	<p><a href="/review">Code review</a> · <a href="/terminal">Terminal</a></p>
+	<h1>pi</h1>
+	<p class="nav"><a href="/review">Code review</a> <a href="/terminal">Terminal</a></p>
 	<h2 style="font-size:1em;margin-top:1.5em">Sessions</h2>
 	<ul>
 ${items}
@@ -222,27 +231,30 @@ function renderReviewPage(): string {
 <html lang="en">
 <head>
 	<meta charset="UTF-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 	<title>pi review</title>
 	<style>
-		body { font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 2em; }
-		h1 { font-size: 1.2em; margin-bottom: 1em; }
-		h1 a { color: #8abeb7; text-decoration: none; }
-		.panel { background: #141414; border: 1px solid #2a2a2a; border-radius: 4px; padding: 1em; margin-bottom: 1em; }
-		.panel h2 { font-size: 1em; margin: 0 0 0.8em 0; color: #999; }
+		*, *::before, *::after { box-sizing: border-box; }
+		body { font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 0; padding: 16px; }
+		header { display: flex; gap: 6px; align-items: center; margin-bottom: 1em; font-size: 13px; color: #999; }
+		header a { color: #8abeb7; text-decoration: none; font-weight: 500; }
+		header a:hover { color: #a0d8cf; }
+		header .sep { color: #555; }
+		.panel { background: #141414; border: 1px solid #2a2a2a; border-radius: 6px; padding: 1em; margin-bottom: 1em; }
+		.panel h2 { font-size: 1em; margin: 0 0 0.6em 0; color: #999; }
 		label { display: block; margin: 0.3em 0; font-size: 0.9em; color: #999; }
-		input, button { font-family: inherit; font-size: 0.9em; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 0.4em 0.6em; border-radius: 3px; }
-		input { width: 200px; }
-		button { cursor: pointer; background: #2a4a3f; border-color: #3a6a5f; }
+		input, button { font-family: inherit; font-size: 15px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 10px 12px; border-radius: 4px; }
+		input { width: 100%; max-width: 280px; }
+		button { cursor: pointer; background: #2a4a3f; border-color: #3a6a5f; white-space: nowrap; min-height: 44px; }
 		button:hover { background: #3a6a5f; }
 		button.danger { background: #4a2a2a; border-color: #6a3a3a; }
 		button.danger:hover { background: #6a3a3a; }
 		.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0.3em 0; }
-		.row label { margin: 0; }
+		.row label { margin: 0; flex: 1; min-width: 120px; }
 		.status { font-size: 0.85em; color: #999; }
 		.status .num { color: #e6e6e6; font-weight: bold; }
-		.diff-view { background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 4px; padding: 0; overflow: auto; max-height: 70vh; }
-		.diff-view pre { margin: 0; padding: 1em; font-size: 0.85em; line-height: 1.5; white-space: pre-wrap; }
+		.diff-view { background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0; overflow: auto; max-height: 60vh; -webkit-overflow-scrolling: touch; }
+		.diff-view pre { margin: 0; padding: 12px; font-size: 0.8em; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
 		.add { color: #60c060; }
 		.del { color: #e06060; }
 		.hdr { color: #8abeb7; }
@@ -250,10 +262,20 @@ function renderReviewPage(): string {
 		.msg.error { color: #e06060; }
 		.msg.success { color: #60c060; }
 		.hidden { display: none; }
+		@media (max-width: 600px) {
+			body { padding: 10px; }
+			.panel { padding: 0.8em; border-radius: 4px; }
+			.row { flex-direction: column; align-items: stretch; gap: 6px; }
+			.row button { width: 100%; }
+			input { max-width: none; }
+			button { min-height: 44px; }
+		}
 	</style>
 </head>
 <body>
-	<h1><a href="/">pi</a> / review</h1>
+	<header>
+		<a href="/">pi</a> <span class="sep">/</span> review
+	</header>
 
 	<div class="panel hidden" id="panel-start">
 		<h2>Start review</h2>
@@ -431,33 +453,39 @@ function renderTerminalPage(): string {
 <html lang="en">
 <head>
 	<meta charset="UTF-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 	<title>pi terminal</title>
 	<style>
-		body { font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 0; display: flex; flex-direction: column; height: 100vh; }
-		header { padding: 8px 14px; border-bottom: 1px solid #2a2a2a; font-size: 13px; color: #999; display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
-		header a { color: #8abeb7; text-decoration: none; }
-		header input { font-family: inherit; font-size: 13px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 4px 8px; border-radius: 3px; width: 200px; }
-		#output { flex: 1; overflow-y: auto; padding: 1em; font-size: 0.85em; line-height: 1.5; white-space: pre-wrap; }
+		*, *::before, *::after { box-sizing: border-box; }
+		body { font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 0; display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+		header { padding: 10px 14px; border-bottom: 1px solid #2a2a2a; font-size: 13px; color: #999; display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+		header a { color: #8abeb7; text-decoration: none; font-weight: 500; }
+		header a:hover { color: #a0d8cf; }
+		header .sep { color: #555; }
+		header .cwd-wrap { flex: 1; text-align: right; }
+		header input { font-family: inherit; font-size: 13px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 6px 8px; border-radius: 4px; width: 160px; }
+		#output { flex: 1; overflow-y: auto; padding: 12px; font-size: 0.85em; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
 		#input-line { display: flex; border-top: 1px solid #2a2a2a; flex-shrink: 0; }
-		#input-line span { padding: 8px 12px; color: #60c060; font-size: 0.9em; user-select: none; }
-		#input-line input { flex: 1; font-family: inherit; font-size: 0.9em; background: transparent; color: #e6e6e6; border: none; padding: 8px 0; outline: none; }
+		#input-line span { padding: 12px 10px 12px 14px; color: #60c060; font-size: 15px; user-select: none; }
+		#input-line input { flex: 1; font-family: inherit; font-size: 15px; background: transparent; color: #e6e6e6; border: none; padding: 12px 0; outline: none; }
 		.dim { color: #666; }
 		.err { color: #e06060; }
+		@media (max-width: 600px) {
+			header { padding: 8px 10px; }
+			header input { width: 120px; font-size: 12px; }
+			#output { padding: 8px; font-size: 0.8em; }
+		}
 	</style>
 </head>
 <body>
 	<header>
-		<a href="/">pi</a>
-		<span>/</span>
-		<span>terminal</span>
-		<span style="flex:1"></span>
-		<input id="cwd" placeholder="${escapeHtml(process.cwd())}" title="Working directory" />
+		<a href="/">pi</a> <span class="sep">/</span> terminal
+		<span class="cwd-wrap"><input id="cwd" placeholder="cwd" title="Working directory" value="${escapeHtml(process.cwd())}" /></span>
 	</header>
 	<div id="output"></div>
 	<div id="input-line">
 		<span>$</span>
-		<input id="cmd" autofocus placeholder="Enter command…" />
+		<input id="cmd" autofocus placeholder="Enter command…" spellcheck="false" />
 	</div>
 	<script>
 		const output = document.getElementById("output");
