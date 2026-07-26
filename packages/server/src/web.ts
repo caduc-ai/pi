@@ -232,6 +232,65 @@ ${items}
 				resultEl.className = "spawn-result error";
 			}
 		}
+	function loadPastSessions() {
+		function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+		var cwdInput = document.getElementById("spawn-cwd");
+		var label = document.getElementById("past-cwd");
+		var list = document.getElementById("past-list");
+		async function refresh() {
+			var cwd = cwdInput.value.trim() || ".";
+			try {
+				var res = await fetch("/api/sessions?cwd=" + encodeURIComponent(cwd));
+				var data = await res.json();
+				if (!data.ok || !data.sessions || data.sessions.length === 0) {
+					label.textContent = "";
+					list.innerHTML = '<span class="meta">No past sessions</span>';
+					return;
+				}
+				label.textContent = "(" + data.sessions.length + ")";
+				list.innerHTML = data.sessions.map(function(s) {
+					var name = s.name || s.firstMessage || s.id.slice(0, 8);
+					var date = new Date(s.modified).toLocaleDateString();
+					return '<div class="past-item">' +
+						'<span>' + esc(name) + ' <span class="meta">' + s.messageCount + ' msgs \u00b7 ' + date + '</span></span>' +
+						'<button onclick="resumeSession(&apos;" + esc(s.path) + "&apos;, &apos;" + esc(s.cwd || cwd) + "&apos;, &apos;" + esc(name) + "&apos;)">Resume</button>' +
+						'</div>';
+				}).join("");
+			} catch (_err) {
+				list.innerHTML = '<span class="meta error">Failed to load</span>';
+			}
+		}
+		cwdInput.addEventListener("change", refresh);
+		cwdInput.addEventListener("blur", refresh);
+		refresh();
+	}
+
+	async function resumeSession(path, cwd, name) {
+		var resultEl = document.getElementById("spawn-result");
+		resultEl.textContent = "Resuming\u2026";
+		resultEl.className = "spawn-result";
+		try {
+			var res = await fetch("/api/spawn", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ cwd: cwd, label: name || undefined, sessionFile: path }),
+			});
+			var data = await res.json();
+			if (data.ok && data.instance) {
+				resultEl.textContent = "Resumed! Opening\u2026";
+				resultEl.className = "spawn-result success";
+				window.location.href = "/i/" + data.instance.id + "/";
+			} else {
+				resultEl.textContent = "Error: " + (data.error || "unknown");
+				resultEl.className = "spawn-result error";
+			}
+		} catch (error) {
+			resultEl.textContent = "Error: " + error.message;
+			resultEl.className = "spawn-result error";
+		}
+	}
+
+	loadPastSessions();
 	</script>
 </body>
 </html>`;
@@ -468,71 +527,6 @@ function renderReviewPage(): string {
 
 		loadStatus();
 	</script>
-			resultEl.textContent = "Error: " + error.message;
-			resultEl.className = "spawn-result error";
-		}
-	}
-
-	function loadPastSessions() {
-		function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
-		var cwdInput = document.getElementById("spawn-cwd");
-		var label = document.getElementById("past-cwd");
-		var list = document.getElementById("past-list");
-		async function refresh() {
-			var cwd = cwdInput.value.trim() || ".";
-			try {
-				var res = await fetch("/api/sessions?cwd=" + encodeURIComponent(cwd));
-				var data = await res.json();
-				if (!data.ok || !data.sessions || data.sessions.length === 0) {
-					label.textContent = "";
-					list.innerHTML = '<span class="meta">No past sessions</span>';
-					return;
-				}
-				label.textContent = "(" + data.sessions.length + ")";
-				list.innerHTML = data.sessions.map(function(s) {
-					var name = s.name || s.firstMessage || s.id.slice(0, 8);
-					var date = new Date(s.modified).toLocaleDateString();
-					return '<div class="past-item">' +
-						'<span>' + esc(name) + ' <span class="meta">' + s.messageCount + ' msgs \u00b7 ' + date + '</span></span>' +
-						'<button onclick="resumeSession('' + esc(s.path) + '', '' + esc(s.cwd || cwd) + '', '' + esc(name) + '')">Resume</button>' +
-						'</div>';
-				}).join("");
-			} catch (_err) {
-				list.innerHTML = '<span class="meta error">Failed to load</span>';
-			}
-		}
-		cwdInput.addEventListener("change", refresh);
-		cwdInput.addEventListener("blur", refresh);
-		refresh();
-	}
-
-	async function resumeSession(path, cwd, name) {
-		var resultEl = document.getElementById("spawn-result");
-		resultEl.textContent = "Resuming\u2026";
-		resultEl.className = "spawn-result";
-		try {
-			var res = await fetch("/api/spawn", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ cwd: cwd, label: name || undefined, sessionFile: path }),
-			});
-			var data = await res.json();
-			if (data.ok && data.instance) {
-				resultEl.textContent = "Resumed! Opening\u2026";
-				resultEl.className = "spawn-result success";
-				window.location.href = "/i/" + data.instance.id + "/";
-			} else {
-				resultEl.textContent = "Error: " + (data.error || "unknown");
-				resultEl.className = "spawn-result error";
-			}
-		} catch (error) {
-			resultEl.textContent = "Error: " + error.message;
-			resultEl.className = "spawn-result error";
-		}
-	}
-
-	loadPastSessions();
-	</script>
 </body>
 </html>`;
 }
@@ -545,27 +539,26 @@ function renderTerminalPage(): string {
 	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 	<title>pi terminal</title>
 	<style>
-		*, *::before, *::after { box-sizing: border-box; }
-		body { font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 0; display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
-		header { padding: 10px 14px; border-bottom: 1px solid #2a2a2a; font-size: 13px; color: #999; display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
-		header a { color: #8abeb7; text-decoration: none; font-weight: 500; }
-		header a:hover { color: #a0d8cf; }
-		header .sep { color: #555; }
-		header .home-btn { display: inline-flex; align-items: center; padding: 6px 6px; border-radius: 4px; color: #999; }
-		header .home-btn:hover { color: #e6e6e6; background: #1a1a1a; }
-		header .cwd-wrap { flex: 1; text-align: right; }
-		header input { font-family: inherit; font-size: 13px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 6px 8px; border-radius: 4px; width: 160px; }
-		#output { flex: 1; overflow-y: auto; padding: 12px; font-size: 0.85em; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
-		#input-line { display: flex; border-top: 1px solid #2a2a2a; flex-shrink: 0; }
-		#input-line span { padding: 12px 10px 12px 14px; color: #60c060; font-size: 15px; user-select: none; }
-		#input-line input { flex: 1; font-family: inherit; font-size: 15px; background: transparent; color: #e6e6e6; border: none; padding: 12px 0; outline: none; }
-		.dim { color: #666; }
-		.err { color: #e06060; }
-		@media (max-width: 600px) {
-			header { padding: 8px 10px; }
-			header input { width: 120px; font-size: 12px; }
-			#output { padding: 8px; font-size: 0.8em; }
-		}
+		*, *::before, *::after box-sizing: border-box; 
+		body font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 0; display: flex; flex-direction: column; height: 100vh; height: 100dvh; 
+		header padding: 10px 14px; border-bottom: 1px solid #2a2a2a; font-size: 13px; color: #999; display: flex; gap: 6px; align-items: center; flex-shrink: 0; 
+		header a color: #8abeb7; text-decoration: none; font-weight: 500; 
+		header a:hover color: #a0d8cf; 
+		header .sep color: #555; 
+		header .home-btn display: inline-flex; align-items: center; padding: 6px 6px; border-radius: 4px; color: #999; 
+		header .home-btn:hover color: #e6e6e6; background: #1a1a1a; 
+		header .cwd-wrap flex: 1; text-align: right; 
+		header input font-family: inherit; font-size: 13px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 6px 8px; border-radius: 4px; width: 160px; 
+		#output flex: 1; overflow-y: auto; padding: 12px; font-size: 0.85em; line-height: 1.5; white-space: pre-wrap; word-break: break-all; 
+		#input-line display: flex; border-top: 1px solid #2a2a2a; flex-shrink: 0; 
+		#input-line span padding: 12px 10px 12px 14px; color: #60c060; font-size: 15px; user-select: none; 
+		#input-line input flex: 1; font-family: inherit; font-size: 15px; background: transparent; color: #e6e6e6; border: none; padding: 12px 0; outline: none; 
+		.dim color: #666; 
+		.err color: #e06060; 
+		@media (max-width: 600px) 
+			header padding: 8px 10px; 
+			header input width: 120px; font-size: 12px; 
+			#output padding: 8px; font-size: 0.8em; 
 	</style>
 </head>
 <body>
