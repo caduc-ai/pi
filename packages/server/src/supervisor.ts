@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Socket } from "node:net";
 import type {
 	AgentSessionEvent,
 	AgentSessionEventListener,
@@ -13,8 +14,141 @@ import { createRpcProcessInstance, type RpcProcessInstance } from "./rpc-process
 import { getInstance, loadInstances, removeInstance, saveInstances, upsertInstance } from "./storage.ts";
 import type { InstanceRecord, InstanceStatus } from "./types.ts";
 
+/** Abstraction over an RPC transport (child process or socket). */
+export interface RpcChannel {
+	send(command: RpcCommand): Promise<RpcResponse>;
+	handleUiResponse(response: RpcExtensionUIResponse): void;
+	setUiRequestHandler(handler?: (request: RpcExtensionUIRequest) => void): void;
+	onEvent(listener: (event: AgentSessionEvent) => void): () => void;
+	onExit(listener: (error?: Error) => void): () => void;
+	dispose(): Promise<void>;
+}
+
+/** Wraps a net.Socket as an RpcChannel for externally-registered instances. */
+class SocketRpcChannel implements RpcChannel {
+	private readonly socket: Socket;
+	private exited = false;
+	private buffer = "";
+	private nextRequestId = 0;
+	private readonly pendingRequests = new Map<
+		string,
+		{ resolve: (response: RpcResponse) => void; reject: (error: Error) => void }
+	>();
+	private readonly eventListeners = new Set<(event: AgentSessionEvent) => void>();
+	private readonly exitListeners = new Set<(error?: Error) => void>();
+	private uiRequestHandler: ((request: RpcExtensionUIRequest) => void) | undefined;
+
+	constructor(socket: Socket) {
+		this.socket = socket;
+		socket.on("data", (chunk: Buffer | string) => this.onData(chunk.toString()));
+		socket.once("error", (error) => this.handleExit(error));
+		socket.once("close", () => this.handleExit(new Error("Socket closed")));
+	}
+
+	private onData(chunk: string): void {
+		this.buffer += chunk;
+		for (;;) {
+			const newlineIndex = this.buffer.indexOf("\n");
+			if (newlineIndex === -1) break;
+			const line = this.buffer.slice(0, newlineIndex).trim();
+			this.buffer = this.buffer.slice(newlineIndex + 1);
+			if (!line) continue;
+			this.handleLine(line);
+		}
+	}
+
+	private handleLine(line: string): void {
+		let parsed: { type?: string; id?: string };
+		try {
+			parsed = JSON.parse(line) as { type?: string; id?: string };
+		} catch {
+			return;
+		}
+		switch (parsed.type) {
+			case "response": {
+				if (!parsed.id) return;
+				const pending = this.pendingRequests.get(parsed.id);
+				if (!pending) return;
+				this.pendingRequests.delete(parsed.id);
+				pending.resolve(parsed as RpcResponse);
+				return;
+			}
+			case "extension_ui_request": {
+				this.uiRequestHandler?.(parsed as RpcExtensionUIRequest);
+				return;
+			}
+			default: {
+				for (const listener of this.eventListeners) {
+					listener(parsed as AgentSessionEvent);
+				}
+			}
+		}
+	}
+
+	private rejectAllPending(error: Error): void {
+		for (const [id, pending] of this.pendingRequests) {
+			this.pendingRequests.delete(id);
+			pending.reject(error);
+		}
+	}
+
+	private handleExit(error?: Error): void {
+		if (this.exited) return;
+		this.exited = true;
+		this.rejectAllPending(error ?? new Error("RPC channel closed"));
+		for (const listener of this.exitListeners) {
+			listener(error);
+		}
+	}
+
+	send(command: RpcCommand): Promise<RpcResponse> {
+		if (this.exited) throw new Error("RPC channel is closed");
+		const id = command.id ?? `srv_${++this.nextRequestId}_${randomUUID()}`;
+		const fullCommand = { ...command, id };
+		return new Promise<RpcResponse>((resolve, reject) => {
+			this.pendingRequests.set(id, { resolve, reject });
+			if (!this.socket.write(`${JSON.stringify(fullCommand)}\n`)) {
+				this.pendingRequests.delete(id);
+				reject(new Error("Socket write failed"));
+			}
+		});
+	}
+
+	handleUiResponse(response: RpcExtensionUIResponse): void {
+		if (this.exited) return;
+		this.socket.write(`${JSON.stringify(response)}\n`);
+	}
+
+	setUiRequestHandler(handler?: (request: RpcExtensionUIRequest) => void): void {
+		this.uiRequestHandler = handler;
+	}
+
+	onEvent(listener: (event: AgentSessionEvent) => void): () => void {
+		this.eventListeners.add(listener);
+		return () => {
+			this.eventListeners.delete(listener);
+		};
+	}
+
+	onExit(listener: (error?: Error) => void): () => void {
+		this.exitListeners.add(listener);
+		return () => {
+			this.exitListeners.delete(listener);
+		};
+	}
+
+	async dispose(): Promise<void> {
+		this.uiRequestHandler = undefined;
+		this.rejectAllPending(new Error("RPC channel disposed"));
+		if (!this.exited) {
+			this.socket.destroy();
+		}
+	}
+}
+
 interface LiveInstanceResources {
 	rpcProcess?: RpcProcessInstance;
+	rpcChannel?: RpcChannel;
 	radiusPiId?: string;
 	sessionId?: string;
 }
