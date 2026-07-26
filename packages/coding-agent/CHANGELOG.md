@@ -10,6 +10,7 @@
 - Added a `/themes` endpoint to web mode listing available themes (built-in, custom, and registered), served like the TUI resolves them.
 - Added SOCKS5 proxy support to the `httpProxy` setting and the `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` environment variables, so API requests can be routed through a VPN-backed tunnel. `socks5h://` is accepted and normalized to `socks5://`; target hostnames are resolved by the proxy, so DNS does not leak around the tunnel. See [Network](docs/settings.md#network).
 - Added builtin slash commands to the RPC protocol: `get_commands` now also returns `/compact`, `/new`, `/name`, `/model`, `/session`, `/export`, `/copy`, `/fork`, and `/clone` with source `"builtin"`, mapped to RPC command verbs (see [rpc.md](docs/rpc.md#get_commands)).
+- Added a built-in Claude Code bridge extension that registers Claude Code as a pi provider and adds an AskClaude delegation tool. The bridge rejects inherited SOCKS proxy URLs with an actionable HTTP-bridge error because Claude Code only accepts HTTP(S) proxies.
 
 ## [0.82.1] - 2026-07-25
 
