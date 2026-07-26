@@ -52,10 +52,18 @@ export class RpcProcessInstance {
 				args: ["--mode", "rpc"],
 			};
 		}
+		// Dev mode: run via tsx so TypeScript source works without a build step.
+		const srcDir = dirname(fileURLToPath(import.meta.url));
+		const repoRoot = dirname(dirname(dirname(srcDir)));
+		const tsxBin = join(repoRoot, "node_modules", ".bin", "tsx");
 		return {
 			command: process.execPath,
-			// import.meta.resolve matches the "import" condition in the package exports map
-			args: [fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry"))],
+			args: [
+				tsxBin,
+				"--tsconfig",
+				join(repoRoot, "tsconfig.json"),
+				fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry")),
+			],
 		};
 	}
 
