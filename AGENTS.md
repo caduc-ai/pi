@@ -26,7 +26,12 @@
 ## Commands
 
 - After code changes (not docs): `npm run check` (full output, no tail). Fix all errors, warnings, and infos before committing. Does not run tests.
-- Never run `npm run build` or `npm test` unless requested by the user.
+- Never run `npm test` unless requested by the user.
+- Don't run `npm run build` for routine code changes; `npm run check` typechecks without emitting. But **do** build when the user needs to actually run the change, because `dist/` is what runs, not `src/`:
+  - The user is about to try the feature manually, or reports "nothing changed" / stale behavior.
+  - The change touches something served or spawned from `dist/`: `packages/web` assets (`pi --web` serves `packages/web/dist`), the RPC bridge/protocol, `cli.js`, or `rpc-entry.js`.
+  - Verifying end to end. `tsx` and vitest run TypeScript sources directly, so passing tests do **not** prove `dist/` is current. Verify against `dist/` before reporting a runnable feature complete.
+  - Build the whole repo with `npm run build` from the root; per-package builds miss cross-package artifacts (e.g. building `packages/web` alone leaves a stale coding-agent server that still rejects new RPC commands).
 - Never run the full vitest suite directly: it includes e2e tests that activate when endpoint/auth env vars are present. For all non-e2e tests, run `./test.sh` from the repo root. Otherwise run specific tests from the package root: `node ../../node_modules/vitest/dist/cli.js --run test/specific.test.ts`.
 - If you create or modify a test file, run it and iterate on test or implementation until it passes.
 - For `packages/coding-agent/test/suite/`, use `test/suite/harness.ts` + the faux provider. No real provider APIs, keys, or paid tokens.
