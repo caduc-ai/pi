@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Fixed the server review page to start from the current branch's GitHub PR by default, creating the PR when one does not already exist.
+- Removed the standalone terminal link from the server home page.
 - Fixed extension UI requests only reaching the last attached rpc_stream client: requests now fan out to all stream clients, dialog responses are first-response-wins, and other clients receive `extension_ui_cancel`.
 - Fixed spawning RPC child processes under Node (the `./rpc-entry` package subpath only declares an `import` condition; resolution now uses `import.meta.resolve`).
 

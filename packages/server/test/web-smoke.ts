@@ -135,6 +135,9 @@ try {
 	if (indexHtml.includes('<div id="past-list">')) pass("index: past-list container present");
 	else fail("index: past-list container missing");
 
+	if (!indexHtml.includes('href="/terminal"')) pass("index: terminal link absent");
+	else fail("index: terminal link present");
+
 	if (cssBracesBalanced(indexHtml)) pass("index: CSS braces balanced");
 	else fail("index: CSS braces unbalanced");
 
@@ -179,6 +182,12 @@ try {
 	if (reviewHtml.includes("function startReview()")) pass("review: startReview present");
 	else fail("review: startReview missing");
 
+	if (reviewHtml.includes("createPr: !base && !head")) pass("review: current branch PR default present");
+	else fail("review: current branch PR default missing");
+
+	if (reviewHtml.includes('params.get("start") === "1"')) pass("review: auto-start param present");
+	else fail("review: auto-start param missing");
+
 	if (reviewHtml.includes("home-btn")) pass("review: home button present");
 	else fail("review: home button missing");
 
@@ -200,6 +209,10 @@ try {
 	const spawnData = (await spawnRes.json()) as { ok: boolean; instance?: { id: string } };
 	if (spawnData.ok && spawnData.instance && spawnData.instance.id) pass("API: /api/spawn works");
 	else fail("API: /api/spawn failed");
+
+	const indexWithInstanceHtml = await fetchPage("/");
+	if (indexWithInstanceHtml.includes('&start=1">review</a>')) pass("index: review link auto-starts");
+	else fail("index: review link auto-start missing");
 } catch (err) {
 	fail(`Exception: ${err instanceof Error ? err.message : String(err)}`);
 	console.error(err);
