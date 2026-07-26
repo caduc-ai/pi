@@ -8,6 +8,7 @@
 - Added `/web [off|<host>]` command to share a live interactive session to the pi web UI mid-flight, displaying a URL and QR code. Extension dialogs are multiplexed between the TUI and all connected web clients (first response wins); notifications, statuses, widgets, and titles are forwarded to web clients.
 - Added read-only session viewer: `pi --web --view <session.jsonl>` serves a recorded session file to the web UI without an agent process (no model or auth required).
 - Added a `/themes` endpoint to web mode listing available themes (built-in, custom, and registered), served like the TUI resolves them.
+- Added SOCKS5 proxy support to the `httpProxy` setting and the `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` environment variables, so API requests can be routed through a VPN-backed tunnel. `socks5h://` is accepted and normalized to `socks5://`; target hostnames are resolved by the proxy, so DNS does not leak around the tunnel. See [Network](docs/settings.md#network).
 - Added builtin slash commands to the RPC protocol: `get_commands` now also returns `/compact`, `/new`, `/name`, `/model`, `/session`, `/export`, `/copy`, `/fork`, and `/clone` with source `"builtin"`, mapped to RPC command verbs (see [rpc.md](docs/rpc.md#get_commands)).
 
 ## [0.82.1] - 2026-07-25

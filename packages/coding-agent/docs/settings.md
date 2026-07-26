@@ -84,13 +84,55 @@ Set `PI_SKIP_VERSION_CHECK=1` to disable the Pi version update check. Use `--off
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `httpProxy` | string | - | HTTP proxy URL applied as `HTTP_PROXY` and `HTTPS_PROXY`. Global setting only. |
+| `httpProxy` | string | - | Proxy URL applied as `HTTP_PROXY` and `HTTPS_PROXY`. Supports `http://`, `https://`, `socks5://`, and `socks5h://`. Global setting only. |
 
 ```json
 {
   "httpProxy": "http://127.0.0.1:7890"
 }
 ```
+
+`httpProxy` never overrides `HTTP_PROXY`/`HTTPS_PROXY` if they are already set in the
+environment. `NO_PROXY` is honoured for both proxy types.
+
+#### Routing API requests through a VPN (SOCKS5)
+
+Point `httpProxy` at a SOCKS5 endpoint to send provider traffic through a tunnel while
+leaving the rest of the machine on the direct route:
+
+```json
+{
+  "httpProxy": "socks5h://127.0.0.1:1080"
+}
+```
+
+`socks5h://` and `socks5://` behave identically here: pi always sends the target
+*hostname* to the proxy and lets it resolve, so DNS does not leak around the tunnel.
+SOCKS4 is not supported. The default port is `1080` when none is given, and
+`socks5h://user:pass@host:1080` supplies username/password authentication.
+
+To back that endpoint with OpenVPN without moving the whole host onto the VPN, run
+OpenVPN inside a network namespace and expose a SOCKS5 listener into it. Only traffic
+that enters the listener is tunnelled; pi needs no elevated privileges and never manages
+the VPN process itself. For example, with a namespace named `vpn`:
+
+```bash
+# One-time: create the namespace and start OpenVPN inside it.
+sudo ip netns add vpn
+sudo ip netns exec vpn openvpn --config /etc/openvpn/provider.ovpn --daemon
+
+# Expose a SOCKS5 listener that egresses through the namespace.
+sudo ip netns exec vpn ssh -N -D 0.0.0.0:1080 localhost
+```
+
+Any SOCKS5 server works — `ssh -D`, `microsocks`, or `danted`. Verify the tunnel is
+actually used by comparing `curl https://api.ipify.org` with and without
+`--proxy socks5h://127.0.0.1:1080`.
+
+Because this is a plain proxy setting, it applies to pi's own HTTP clients. Tools you
+invoke from bash and MCP servers inherit `HTTP_PROXY`/`HTTPS_PROXY` from the environment
+as usual. If you need hard network isolation rather than routing, see
+[containerization.md](containerization.md).
 
 ### Warnings
 
