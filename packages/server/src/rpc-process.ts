@@ -32,8 +32,11 @@ export class RpcProcessInstance {
 	private readonly exitListeners = new Set<(error?: Error) => void>();
 	private uiRequestHandler: ((request: RpcExtensionUIRequest) => void) | undefined;
 
-	constructor(options: { cwd: string }) {
+	constructor(options: { cwd: string; sessionFile?: string }) {
 		const rpcCommand = this.getSpawnCommand();
+		if (options.sessionFile) {
+			rpcCommand.args.push("--session", options.sessionFile);
+		}
 		this.process = spawn(rpcCommand.command, rpcCommand.args, {
 			cwd: options.cwd,
 			env: process.env,
@@ -203,6 +206,6 @@ export class RpcProcessInstance {
 	}
 }
 
-export function createRpcProcessInstance(options: { cwd: string }): RpcProcessInstance {
+export function createRpcProcessInstance(options: { cwd: string; sessionFile?: string }): RpcProcessInstance {
 	return new RpcProcessInstance(options);
 }

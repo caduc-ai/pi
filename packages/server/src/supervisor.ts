@@ -425,7 +425,7 @@ export class ServerSupervisor {
 		return stored ? cloneInstance(stored) : undefined;
 	}
 
-	async spawnInstance(options: { cwd: string; label?: string }): Promise<InstanceRecord> {
+	async spawnInstance(options: { cwd: string; label?: string; sessionFile?: string }): Promise<InstanceRecord> {
 		const now = new Date().toISOString();
 		const live: LiveInstance = {
 			record: {
@@ -445,7 +445,7 @@ export class ServerSupervisor {
 		upsertInstance(live.record);
 
 		try {
-			const rpcProcess = createRpcProcessInstance({ cwd: options.cwd });
+			const rpcProcess = createRpcProcessInstance({ cwd: options.cwd, sessionFile: options.sessionFile });
 			this.bindRpcChannel(live, rpcProcess);
 			await this.syncInstanceRecord(live);
 			const registeredRecord = await radiusPresence.registerPi(live.record);

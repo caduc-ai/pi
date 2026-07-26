@@ -23,21 +23,25 @@ import {
 	type RpcCommand,
 	type RpcExtensionUIResponse,
 } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent/dist/core/session-manager.js";
 import { WebSocketServer } from "ws";
 import { supervisor } from "./supervisor.ts";
 
 const CRANIUM_BIN = process.env.PI_CRANIUM_BIN || path.join(homedir(), "dev", "cranium", "dist", "src", "cli.js");
 
-function runCranium(args: string[], input?: string): { ok: true; data: unknown } | { ok: false; error: string } {
+function runCranium(
+	args: string[],
+	opts?: { input?: string; cwd?: string },
+): { ok: true; data: unknown } | { ok: false; error: string } {
 	try {
 		const stdout = execFileSync(process.execPath, [CRANIUM_BIN, ...args], {
 			encoding: "utf-8",
 			maxBuffer: 10 * 1024 * 1024,
-			input,
+			cwd: opts?.cwd,
+			input: opts?.input,
 		});
 		return parseCraniumOutput(stdout);
 	} catch (error) {
-		// cranium exits non-zero on errors but writes JSON to stdout
 		const stdout = (error as { stdout?: string }).stdout;
 		if (stdout) {
 			const parsed = parseCraniumOutput(stdout);
@@ -138,7 +142,7 @@ function renderIndexPage(): string {
 					.map(
 						(instance) =>
 							`<li><a href="/i/${escapeHtml(instance.id)}/">${escapeHtml(instance.label ?? instance.cwd)}</a> ` +
-							`<span class="meta">${escapeHtml(instance.status)} · ${escapeHtml(instance.cwd)}</span></li>`,
+							`<a class="meta" href="/review?cwd=${encodeURIComponent(instance.cwd)}">review</a></li>`,
 					)
 					.join("\n");
 	return `<!doctype html>
@@ -280,6 +284,7 @@ function renderReviewPage(): string {
 			<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><title>Home</title><path d="M2 6l6-4 6 4v8H2V6z" stroke="currentColor" stroke-width="1.2" fill="none" /><rect x="6" y="9" width="4" height="5" stroke="currentColor" stroke-width="1.2" fill="none" /></svg>
 		</a>
 		<span class="sep">/</span> review
+		<span class="sep" style="margin-left:auto;font-size:0.85em;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="review-cwd"></span>
 	</header>
 
 	<div class="panel hidden" id="panel-start">
@@ -319,13 +324,20 @@ function renderReviewPage(): string {
 	<script>
 		const startPanel = document.getElementById("panel-start");
 		const activePanel = document.getElementById("panel-active");
+		const params = new URLSearchParams(location.search);
+		const repoCwd = params.get("cwd") || "";
+		if (repoCwd) {
+			document.getElementById("review-cwd").textContent = repoCwd;
+			document.getElementById("start-repo").value = repoCwd;
+		}
 		let sessionId = null;
 		let currentFile = null;
 		let currentFingerprint = null;
 
 		async function api(method, url, body) {
-			const opts = { method, headers: body ? { "Content-Type": "application/json" } : {} };
-			if (body) opts.body = JSON.stringify(body);
+			if (repoCwd) url += (url.indexOf("?") === -1 ? "?" : "&") + "repo=" + encodeURIComponent(repoCwd);
+			const opts = { method, headers: body != null ? { "Content-Type": "application/json" } : {} };
+			if (body != null) opts.body = JSON.stringify({ repo: repoCwd || undefined, ...body });
 			const res = await fetch(url, opts);
 			return res.json();
 		}
@@ -395,7 +407,7 @@ function renderReviewPage(): string {
 		async function startReview() {
 			const base = document.getElementById("start-base").value.trim() || "main";
 			const head = document.getElementById("start-head").value.trim() || "HEAD";
-			const repo = document.getElementById("start-repo").value.trim();
+			const repo = document.getElementById("start-repo").value.trim() || repoCwd;
 			const msg = document.getElementById("start-msg");
 			msg.textContent = "Starting…"; msg.className = "msg";
 			const data = await api("POST", "/api/review/start", { base, head, repo: repo || undefined });
@@ -577,9 +589,13 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			request.on("end", () => {
 				void (async () => {
 					try {
-						const parsed = JSON.parse(body) as { cwd?: string; label?: string };
+						const parsed = JSON.parse(body) as { cwd?: string; label?: string; sessionFile?: string };
 						const cwd = parsed.cwd?.trim() || process.cwd();
-						const instance = await supervisor.spawnInstance({ cwd, label: parsed.label });
+						const instance = await supervisor.spawnInstance({
+							cwd,
+							label: parsed.label,
+							sessionFile: parsed.sessionFile,
+						});
 						response.writeHead(200, { "content-type": "application/json" });
 						response.end(
 							JSON.stringify({
@@ -603,6 +619,32 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 					}
 				})();
 			});
+			return;
+		}
+
+		// GET /api/sessions?cwd=<path> — list past sessions
+		if (request.method === "GET" && url.pathname === "/api/sessions") {
+			const cwd = url.searchParams.get("cwd") || process.cwd();
+			response.writeHead(200, { "content-type": "application/json" });
+			try {
+				const sessions = await SessionManager.list(cwd);
+				response.end(
+					JSON.stringify({
+						ok: true,
+						sessions: sessions.map((s) => ({
+							id: s.id,
+							path: s.path,
+							cwd: s.cwd,
+							name: s.name,
+							messageCount: s.messageCount,
+							firstMessage: s.firstMessage,
+							modified: s.modified,
+						})),
+					}),
+				);
+			} catch (error: unknown) {
+				response.end(JSON.stringify({ ok: false, error: String(error) }));
+			}
 			return;
 		}
 		// Terminal API
@@ -637,10 +679,14 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			return;
 		}
 
-		// Cranium review API
+		// Cranium review API — all endpoints accept ?repo= or body.repo to set the working directory
+		function reviewCwd(url: URL, bodyRepo?: string): string | undefined {
+			return bodyRepo || url.searchParams.get("repo") || undefined;
+		}
 		if (url.pathname === "/api/review/status" && request.method === "GET") {
+			const cwd = reviewCwd(url);
 			response.writeHead(200, { "content-type": "application/json" });
-			response.end(JSON.stringify(runCranium(["review", "status", "--json"])));
+			response.end(JSON.stringify(runCranium(["review", "status", "--json"], { cwd })));
 			return;
 		}
 		if (url.pathname === "/api/review/start" && request.method === "POST") {
@@ -653,7 +699,7 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 				const args = ["review", "start", "--base", base, "--head", head];
 				if (repo) args.push("--repo", repo);
 				response.writeHead(200, { "content-type": "application/json" });
-				response.end(JSON.stringify(runCranium(args)));
+				response.end(JSON.stringify(runCranium(args, { cwd: repo || undefined })));
 			});
 			return;
 		}
@@ -663,17 +709,19 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 				body += chunk.toString();
 			});
 			request.on("end", () => {
-				const { session } = JSON.parse(body || "{}") as { session?: string };
+				const { session, repo } = JSON.parse(body || "{}") as { session?: string; repo?: string };
+				const cwd = reviewCwd(url, repo);
 				const args = ["review", "next", "--json"];
 				if (session) args.push("--session", session);
 				response.writeHead(200, { "content-type": "application/json" });
-				response.end(JSON.stringify(runCranium(args)));
+				response.end(JSON.stringify(runCranium(args, { cwd })));
 			});
 			return;
 		}
 		if (url.pathname === "/api/review/diff" && request.method === "GET") {
 			const filePath = url.searchParams.get("path");
 			const session = url.searchParams.get("session");
+			const cwd = reviewCwd(url);
 			if (!filePath) {
 				response.writeHead(400, { "content-type": "application/json" });
 				response.end(JSON.stringify({ ok: false, error: "Missing path parameter" }));
@@ -682,7 +730,7 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			const args = ["review", "diff", filePath];
 			if (session) args.push("--session", session);
 			response.writeHead(200, { "content-type": "application/json" });
-			response.end(JSON.stringify(runCranium(args)));
+			response.end(JSON.stringify(runCranium(args, { cwd })));
 			return;
 		}
 		if (url.pathname === "/api/review/mark" && request.method === "POST") {
@@ -695,16 +743,19 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 					path: filePath,
 					session,
 					expected,
+					repo,
 				} = JSON.parse(body) as {
 					path: string;
 					session?: string;
 					expected?: string;
+					repo?: string;
 				};
+				const cwd = reviewCwd(url, repo);
 				const args = ["review", "mark", filePath];
 				if (expected) args.push("--expected", expected);
 				if (session) args.push("--session", session);
 				response.writeHead(200, { "content-type": "application/json" });
-				response.end(JSON.stringify(runCranium(args)));
+				response.end(JSON.stringify(runCranium(args, { cwd })));
 			});
 			return;
 		}
@@ -714,11 +765,12 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 				body += chunk.toString();
 			});
 			request.on("end", () => {
-				const { session } = JSON.parse(body || "{}") as { session?: string };
+				const { session, repo } = JSON.parse(body || "{}") as { session?: string; repo?: string };
+				const cwd = reviewCwd(url, repo);
 				const args = ["review", "clear", "--yes"];
 				if (session) args.push("--session", session);
 				response.writeHead(200, { "content-type": "application/json" });
-				response.end(JSON.stringify(runCranium(args)));
+				response.end(JSON.stringify(runCranium(args, { cwd })));
 			});
 			return;
 		}
@@ -728,11 +780,16 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 				body += chunk.toString();
 			});
 			request.on("end", () => {
-				const { base, session } = JSON.parse(body) as { base: string; session?: string };
+				const { base, session, repo } = JSON.parse(body) as {
+					base: string;
+					session?: string;
+					repo?: string;
+				};
+				const cwd = reviewCwd(url, repo);
 				const args = ["review", "merge", "--base", base, "--yes"];
 				if (session) args.push("--session", session);
 				response.writeHead(200, { "content-type": "application/json" });
-				response.end(JSON.stringify(runCranium(args)));
+				response.end(JSON.stringify(runCranium(args, { cwd })));
 			});
 			return;
 		}
