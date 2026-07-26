@@ -89,7 +89,7 @@ function handleConnectionChange(isConnected: boolean): void {
 	}
 }
 
-function dataAs<T>(response: RpcResponse, command: string): T | undefined {
+export function dataAs<T>(response: RpcResponse, command: string): T | undefined {
 	return response.success && response.command === command ? (response.data as T) : undefined;
 }
 
@@ -354,6 +354,16 @@ function applyEvent(event: AgentSessionEvent): void {
 			pushToast(`Extension error: ${event.error}`, "error");
 			break;
 
+		case "terminal_output":
+			// Not stored in message history: terminal output is display-only and is
+			// never part of the model's context.
+			terminalOutput.value = { data: event.data, seq: terminalOutputSeq++ };
+			break;
+
+		case "terminal_exit":
+			pushToast(event.reason ? `Terminal exited (${event.reason})` : "Terminal exited", "info");
+			break;
+
 		default:
 			break;
 	}
@@ -451,6 +461,18 @@ export async function sendAbort(): Promise<void> {
 // ============================================================================
 // Builtin slash commands (mapped to RPC command verbs, see rpc.md get_commands)
 // ============================================================================
+
+/**
+ * Terminal panel visibility. Hiding the panel does not close the shell: the
+ * terminal is owned by the pi process and keeps running.
+ */
+export const terminalOpen = signal(false);
+/**
+ * Latest terminal output chunk. `seq` makes each chunk a distinct value so
+ * repeated identical output still notifies subscribers.
+ */
+export const terminalOutput = signal<{ data: string; seq: number } | undefined>(undefined);
+let terminalOutputSeq = 0;
 
 /** Transient card shown at the bottom of the chat (e.g. /session output). */
 export const commandResult = signal<{ title: string; markdown: string } | undefined>(undefined);

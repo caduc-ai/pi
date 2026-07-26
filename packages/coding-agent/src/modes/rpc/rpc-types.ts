@@ -54,6 +54,12 @@ export type RpcCommand =
 	| { id?: string; type: "bash"; command: string; excludeFromContext?: boolean }
 	| { id?: string; type: "abort_bash" }
 
+	// Terminal (persistent interactive shell; separate from bash, see docs/rpc.md)
+	| { id?: string; type: "terminal_open"; cols?: number; rows?: number }
+	| { id?: string; type: "terminal_input"; data: string }
+	| { id?: string; type: "terminal_resize"; cols: number; rows: number }
+	| { id?: string; type: "terminal_close" }
+
 	// Session
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "export_html"; outputPath?: string }
@@ -199,6 +205,18 @@ export type RpcResponse =
 	// Bash
 	| { id?: string; type: "response"; command: "bash"; success: true; data: BashResult }
 	| { id?: string; type: "response"; command: "abort_bash"; success: true }
+
+	// Terminal
+	| {
+			id?: string;
+			type: "response";
+			command: "terminal_open";
+			success: true;
+			data: { termId: string; cols: number; rows: number; replay: string };
+	  }
+	| { id?: string; type: "response"; command: "terminal_input"; success: true }
+	| { id?: string; type: "response"; command: "terminal_resize"; success: true }
+	| { id?: string; type: "response"; command: "terminal_close"; success: true }
 
 	// Session
 	| { id?: string; type: "response"; command: "get_session_stats"; success: true; data: SessionStats }

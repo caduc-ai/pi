@@ -2,6 +2,7 @@ import { render } from "preact";
 import { App } from "./app.tsx";
 import { client } from "./state.ts";
 import { initTheme } from "./theme.ts";
+import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 
 void initTheme().catch(() => {
