@@ -485,6 +485,12 @@ function formatTokenCount(count: number): string {
 	return String(count);
 }
 
+/**
+ * /gas: stage everything, commit, and push. Chained with && so a rejected commit
+ * (pre-commit hook failure, or nothing staged) stops before pushing.
+ */
+const GAS_COMMAND = 'git add -A && git commit -m "\u{1F60A}" && git push';
+
 /** Run a bash command (! prefix in the editor). */
 export async function sendBash(command: string): Promise<void> {
 	if (command.trim() === "") return;
@@ -676,6 +682,10 @@ export async function executeBuiltinCommand(text: string): Promise<boolean> {
 			}
 			pushToast("Cloned session", "info");
 			await sync();
+			return true;
+		}
+		case "gas": {
+			await sendBash(GAS_COMMAND);
 			return true;
 		}
 		case "cd": {

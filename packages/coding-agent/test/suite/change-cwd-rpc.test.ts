@@ -132,4 +132,16 @@ describe("change_cwd over RPC", () => {
 		const commands = (response?.data as { commands: Array<{ name: string; source: string }> }).commands;
 		expect(commands.some((command) => command.name === "cd" && command.source === "builtin")).toBe(true);
 	});
+
+	it("offers gas as a builtin command", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		const { receive, client } = await createBridge(harness);
+
+		await receive({ type: "get_commands" });
+
+		const response = client.responseFor("get_commands");
+		const commands = (response?.data as { commands: Array<{ name: string; source: string }> }).commands;
+		expect(commands.some((command) => command.name === "gas" && command.source === "builtin")).toBe(true);
+	});
 });

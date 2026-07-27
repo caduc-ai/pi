@@ -964,6 +964,7 @@ Commands with source `builtin` are NOT invoked via `prompt`; each maps to RPC co
 | `/fork` | `get_fork_messages` + `fork` |
 | `/clone` | `clone` |
 | `/cd <path>` | `change_cwd` |
+| `/gas` | `bash` (`git add -A && git commit -m "😊" && git push`) |
 
 After state-changing builtin commands (`new`, `fork`, `clone`, `cd`, `model`), clients should re-sync with `get_state` and `get_messages`.
 - `location`: Where it was loaded from (optional, not present for extensions):

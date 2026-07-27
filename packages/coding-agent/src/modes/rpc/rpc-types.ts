@@ -115,6 +115,7 @@ export const RPC_BUILTIN_COMMANDS: ReadonlyArray<{ name: string; description: st
 	{ name: "fork", description: "Create a new fork from a previous user message" },
 	{ name: "clone", description: "Duplicate the current session at the current position" },
 	{ name: "cd", description: "Change the session working location", argumentHint: "<path>" },
+	{ name: "gas", description: "Stage all changes, commit, and push" },
 ];
 
 // ============================================================================

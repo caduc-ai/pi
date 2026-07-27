@@ -209,6 +209,12 @@ function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionE
 
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
 
+/**
+ * /gas: stage everything, commit, and push. Chained with && so a rejected commit
+ * (pre-commit hook failure, or nothing staged) stops before pushing.
+ */
+const GAS_COMMAND = 'git add -A && git commit -m "😊" && git push';
+
 function isDeadTerminalError(error: unknown): boolean {
 	if (!error || typeof error !== "object" || !("code" in error)) {
 		return false;
@@ -2880,6 +2886,16 @@ export class InteractiveMode {
 				const target = text.startsWith("/cd ") ? text.slice(4).trim() : undefined;
 				this.editor.setText("");
 				await this.handleChangeWorkingLocationCommand(target || undefined);
+				return;
+			}
+			if (text === "/gas") {
+				if (this.session.isBashRunning) {
+					this.showWarning("A bash command is already running. Press Esc to cancel it first.");
+					return;
+				}
+				this.editor.addToHistory?.(text);
+				this.editor.setText("");
+				await this.handleBashCommand(GAS_COMMAND);
 				return;
 			}
 			if (text === "/quit") {

@@ -315,6 +315,7 @@ function renderReviewPage(): string {
 		header .sep { color: #555; }
 		header .home-btn { display: inline-flex; align-items: center; padding: 4px 6px; border-radius: 4px; color: #999; }
 		header .home-btn:hover { color: #e6e6e6; background: #1a1a1a; }
+		header .branch { color: #b294bb; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 3px; padding: 2px 6px; font-size: 0.85em; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 		.panel { background: #141414; border: 1px solid #2a2a2a; border-radius: 6px; padding: 1em; margin-bottom: 1em; }
 		.panel h2 { font-size: 1em; margin: 0 0 0.6em 0; color: #999; }
 		label { display: block; margin: 0.3em 0; font-size: 0.9em; color: #999; }
@@ -324,6 +325,8 @@ function renderReviewPage(): string {
 		button:hover { background: #3a6a5f; }
 		button.danger { background: #4a2a2a; border-color: #6a3a3a; }
 		button.danger:hover { background: #6a3a3a; }
+		button:disabled { opacity: 0.5; cursor: default; }
+		button:disabled:hover { background: #2a4a3f; }
 		.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0.3em 0; }
 		.row label { margin: 0; flex: 1; min-width: 120px; }
 		.status { font-size: 0.85em; color: #999; }
@@ -353,6 +356,7 @@ function renderReviewPage(): string {
 			<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><title>Home</title><path d="M2 6l6-4 6 4v8H2V6z" stroke="currentColor" stroke-width="1.2" fill="none" /><rect x="6" y="9" width="4" height="5" stroke="currentColor" stroke-width="1.2" fill="none" /></svg>
 		</a>
 		<span class="sep">/</span> review
+		<span class="branch hidden" id="review-branch"></span>
 		<span class="sep" style="margin-left:auto;font-size:0.85em;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="review-cwd"></span>
 	</header>
 
@@ -372,6 +376,7 @@ function renderReviewPage(): string {
 		<div class="row" style="justify-content:space-between">
 			<h2 style="margin:0" id="review-title">Review</h2>
 			<div>
+				<button onclick="commitReview()" id="btn-commit" title="Keep what you have reviewed and pick up new commits">Commit review</button>
 				<button onclick="mergeReview()" id="btn-merge">Merge</button>
 				<button class="danger" onclick="clearReview()">Clear</button>
 			</div>
@@ -408,6 +413,28 @@ function renderReviewPage(): string {
 		function selectedRepo() {
 			return document.getElementById("start-repo").value.trim() || repoCwd;
 		}
+
+		async function loadBranch() {
+			const el = document.getElementById("review-branch");
+			const repo = selectedRepo();
+			if (!repo) {
+				el.classList.add("hidden");
+				return;
+			}
+			try {
+				const res = await fetch("/api/git/branch?repo=" + encodeURIComponent(repo));
+				const data = await res.json();
+				if (data.ok && data.branch) {
+					el.textContent = data.branch;
+					el.classList.remove("hidden");
+					return;
+				}
+			} catch (_err) {
+				// fall through and hide: a missing branch is not a review error
+			}
+			el.classList.add("hidden");
+		}
+		document.getElementById("start-repo").addEventListener("change", loadBranch);
 
 		async function api(method, url, body) {
 			const repo = selectedRepo();
@@ -499,6 +526,8 @@ function renderReviewPage(): string {
 			if (!data.ok) {
 				msg.textContent = data.error || "Failed"; msg.className = "msg error";
 			} else {
+				// --create-pr can move HEAD to a new branch
+				await loadBranch();
 				await loadStatus();
 			}
 		}
@@ -537,6 +566,31 @@ function renderReviewPage(): string {
 			}
 		}
 
+		/**
+		 * Commit the review: re-anchor to the repo's current HEAD while keeping every
+		 * checkpoint. Files reviewed at an older revision come back as "changed" showing
+		 * only what moved since you reviewed them, and new commits add new files.
+		 */
+		async function commitReview() {
+			const msg = document.getElementById("review-msg");
+			const button = document.getElementById("btn-commit");
+			button.disabled = true;
+			msg.textContent = "Committing review\u2026"; msg.className = "msg";
+			try {
+				const data = await api("POST", "/api/review/refresh", sessionId ? { session: sessionId } : {});
+				if (!data.ok) {
+					msg.textContent = data.error || "Failed"; msg.className = "msg error";
+					return;
+				}
+				msg.textContent = "Review committed."; msg.className = "msg success";
+				// HEAD may have moved to a different branch since the review started
+				await loadBranch();
+				await loadStatus();
+			} finally {
+				button.disabled = false;
+			}
+		}
+
 		async function clearReview() {
 			await api("POST", "/api/review/clear", sessionId ? { session: sessionId } : {});
 			sessionId = null;
@@ -544,6 +598,7 @@ function renderReviewPage(): string {
 			await loadStatus();
 		}
 
+		loadBranch();
 		loadStatus();
 	</script>
 </body>
@@ -707,6 +762,24 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			return;
 		}
 
+		// GET /api/git/branch?repo=<path> — current branch of a repo, for the review header
+		if (request.method === "GET" && url.pathname === "/api/git/branch") {
+			const repo = url.searchParams.get("repo") || process.cwd();
+			response.writeHead(200, { "content-type": "application/json" });
+			try {
+				// Detached HEAD exits non-zero, which the catch below reports as no branch.
+				const branch = execFileSync("git", ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"], {
+					cwd: repo,
+					encoding: "utf-8",
+					stdio: ["ignore", "pipe", "ignore"],
+				}).trim();
+				response.end(JSON.stringify({ ok: true, branch: branch || undefined }));
+			} catch {
+				response.end(JSON.stringify({ ok: true, branch: undefined }));
+			}
+			return;
+		}
+
 		// GET /api/sessions?cwd=<path> — list past sessions
 		if (request.method === "GET" && url.pathname === "/api/sessions") {
 			response.writeHead(200, { "content-type": "application/json" });
@@ -856,6 +929,24 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 				const cwd = reviewCwd(url, repo);
 				const args = ["review", "mark", filePath];
 				if (expected) args.push("--expected", expected);
+				if (session) args.push("--session", session);
+				response.writeHead(200, { "content-type": "application/json" });
+				response.end(JSON.stringify(runCranium(args, { cwd })));
+			});
+			return;
+		}
+		// Re-anchor the review to the repo's current HEAD, keeping existing checkpoints:
+		// reviewed files whose content moved become changedSinceReview, and files touched
+		// by new commits are added as unreviewed.
+		if (url.pathname === "/api/review/refresh" && request.method === "POST") {
+			let body = "";
+			request.on("data", (chunk: Buffer | string) => {
+				body += chunk.toString();
+			});
+			request.on("end", () => {
+				const { session, repo } = JSON.parse(body || "{}") as { session?: string; repo?: string };
+				const cwd = reviewCwd(url, repo);
+				const args = ["review", "refresh", "--json"];
 				if (session) args.push("--session", session);
 				response.writeHead(200, { "content-type": "application/json" });
 				response.end(JSON.stringify(runCranium(args, { cwd })));
