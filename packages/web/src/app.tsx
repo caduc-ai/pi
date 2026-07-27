@@ -5,11 +5,13 @@ import { Footer } from "./components/footer.tsx";
 import { MarkdownView } from "./components/markdown-view.tsx";
 import { ForkPicker, ModelPicker } from "./components/pickers.tsx";
 import { TerminalView } from "./components/terminal.tsx";
-import { commandResult, connected, sessionState, terminalOpen, widgets } from "./state.ts";
+import { commandResult, connected, instanceId, sessionState, terminalOpen, widgets } from "./state.ts";
 
 function Header() {
 	const name = sessionState.value?.sessionName;
 	const isConnected = connected.value;
+	// Review runs against the session's working location, which /cd can move.
+	const cwd = sessionState.value?.cwd;
 	return (
 		<header class="header">
 			<a href="/" class="header-home" title="All sessions">
@@ -20,6 +22,25 @@ function Header() {
 				</svg>
 			</a>
 			<span class="header-title">{name ? `pi — ${name}` : "pi"}</span>
+			{cwd ? (
+				<a
+					href={`/review?cwd=${encodeURIComponent(cwd)}${instanceId ? `&instance=${encodeURIComponent(instanceId)}` : ""}`}
+					class="header-review"
+					title={`Review ${cwd}`}
+				>
+					<svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+						<title>Review</title>
+						<path
+							d="M3 2h7l3 3v9H3V2z"
+							stroke="currentColor"
+							stroke-width="1.2"
+							fill="none"
+							stroke-linejoin="round"
+						/>
+						<path d="M5.5 9.5l1.5 1.5 3.5-3.5" stroke="currentColor" stroke-width="1.2" fill="none" />
+					</svg>
+				</a>
+			) : null}
 			<button
 				type="button"
 				class={`header-terminal ${terminalOpen.value ? "active" : ""}`}

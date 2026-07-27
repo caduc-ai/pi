@@ -142,7 +142,7 @@ function renderIndexPage(): string {
 					.map(
 						(instance) =>
 							`<li><a href="/i/${escapeHtml(instance.id)}/">${escapeHtml(instance.label ?? instance.cwd)}</a> ` +
-							`<a class="meta" href="/review?cwd=${encodeURIComponent(instance.cwd)}&start=1">review</a></li>`,
+							`<a class="meta" href="/review?cwd=${encodeURIComponent(instance.cwd)}&instance=${encodeURIComponent(instance.id)}&start=1">review</a></li>`,
 					)
 					.join("\n");
 	return `<!doctype html>
@@ -356,6 +356,9 @@ function renderReviewPage(): string {
 			<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><title>Home</title><path d="M2 6l6-4 6 4v8H2V6z" stroke="currentColor" stroke-width="1.2" fill="none" /><rect x="6" y="9" width="4" height="5" stroke="currentColor" stroke-width="1.2" fill="none" /></svg>
 		</a>
 		<span class="sep">/</span> review
+		<a href="#" class="home-btn hidden" id="review-session-link" title="Back to session">
+			<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><title>Session</title><rect x="1.5" y="3" width="13" height="10" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none" /><path d="M4.5 6.5L6.5 8l-2 1.5M8 9.5h3.5" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+		</a>
 		<span class="branch hidden" id="review-branch"></span>
 		<span class="sep" style="margin-left:auto;font-size:0.85em;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="review-cwd"></span>
 	</header>
@@ -405,6 +408,13 @@ function renderReviewPage(): string {
 		if (repoCwd) {
 			document.getElementById("review-cwd").textContent = repoCwd;
 			document.getElementById("start-repo").value = repoCwd;
+		}
+		// Shown only when we know which session this review was opened from
+		const instanceId = params.get("instance");
+		if (instanceId) {
+			const sessionLink = document.getElementById("review-session-link");
+			sessionLink.href = "/i/" + encodeURIComponent(instanceId) + "/";
+			sessionLink.classList.remove("hidden");
 		}
 		let sessionId = null;
 		let currentFile = null;

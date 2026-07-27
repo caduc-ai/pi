@@ -70,6 +70,8 @@ export function pushToast(message: string, kind: Toast["kind"] = "info"): void {
 // the WS endpoint is always at <base>ws.
 const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
 const basePath = location.pathname.endsWith("/") ? location.pathname : `${location.pathname}/`;
+/** Supervised instance id when served by pi-server, undefined under `pi --web`. */
+export const instanceId = /^\/i\/([0-9a-f-]{36})\//.exec(basePath)?.[1];
 export const client = new RpcClient(`${wsProtocol}://${location.host}${basePath}ws`, {
 	onEvent: handleEvent,
 	onUiRequest: handleUiRequest,
