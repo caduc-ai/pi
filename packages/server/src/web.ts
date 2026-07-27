@@ -761,6 +761,35 @@ function renderReviewPage(): string {
 			return text;
 		}
 
+		/**
+		 * Update the local repository after a merge lands on the remote.
+		 *
+		 * The base branch is usually not checked out, so it is fast-forwarded directly
+		 * as well; reviews resolve refs locally and would otherwise keep diffing against
+		 * the pre-merge commit.
+		 */
+		async function runGitPull(baseBranch) {
+			const repo = selectedRepo();
+			// Updating the base ref only applies when it is not the checked-out branch,
+			// which git refuses; on that branch the pull already covers it.
+			const command =
+				"git pull --ff-only && " +
+				'if [ "$(git rev-parse --abbrev-ref HEAD)" != "' + baseBranch + '" ]; then ' +
+				"git fetch origin " + baseBranch + ":" + baseBranch + "; fi";
+			try {
+				const res = await fetch("/api/bash", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ command: command, cwd: repo || undefined }),
+				});
+				const data = await res.json();
+				if (data.ok) return { ok: true };
+				return { ok: false, error: (data.error || data.output || "git pull failed").trim().split("\\n")[0] };
+			} catch (err) {
+				return { ok: false, error: err.message || "git pull failed" };
+			}
+		}
+
 		async function mergeReview() {
 			const msg = document.getElementById("review-action-msg");
 			const button = document.getElementById("btn-merge");
@@ -797,10 +826,16 @@ function renderReviewPage(): string {
 				}
 				const result = data.data && data.data.result;
 				const pull = result && result.pull;
-				msg.textContent = pull
+				const merged = pull
 					? "Merged " + pull.identity + " into " + baseBranch + "."
 					: "Merged into " + baseBranch + ".";
-				msg.className = "msg success";
+				// The merge happened on GitHub, so pull to bring the local branches in line.
+				// Without this the local base ref stays behind and reviews diff against a
+				// stale commit.
+				msg.textContent = merged + " Pulling\u2026"; msg.className = "msg";
+				const pulled = await runGitPull(baseBranch);
+				msg.textContent = pulled.ok ? merged + " Pulled." : merged + " Pull failed: " + pulled.error;
+				msg.className = pulled.ok ? "msg success" : "msg error";
 				await loadBranch();
 				await loadStatus();
 			} finally {
