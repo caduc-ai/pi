@@ -177,6 +177,7 @@ Response:
   "success": true,
   "data": {
     "model": {...},
+    "cwd": "/home/user/dev/project",
     "thinkingLevel": "medium",
     "isStreaming": false,
     "isCompacting": false,
@@ -192,7 +193,7 @@ Response:
 }
 ```
 
-The `model` field is a full [Model](#model) object or `null`. The `sessionName` field is the display name set via `set_session_name`, or omitted if not set.
+The `model` field is a full [Model](#model) object or `null`. The `sessionName` field is the display name set via `set_session_name`, or omitted if not set. The `cwd` field is the session's working location, which changes with [change_cwd](#change_cwd).
 
 #### get_messages
 
@@ -701,6 +702,40 @@ If an extension cancelled the switch:
 {"type": "response", "command": "switch_session", "success": true, "data": {"cancelled": true}}
 ```
 
+#### change_cwd
+
+Move the session to a different working location. The current history is forked into a new
+session file under the target directory, so the session stays discoverable from its own
+working location. Can be cancelled by a `session_before_switch` extension event handler
+(with reason `change_cwd`).
+
+All cwd-bound resources are reloaded for the target directory, so project extensions,
+skills, and context files change with it. Changing to the current location is a no-op.
+
+```json
+{"type": "change_cwd", "cwd": "/home/user/dev/other-project"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "change_cwd",
+  "success": true,
+  "data": {"cancelled": false, "cwd": "/home/user/dev/other-project"}
+}
+```
+
+If the path does not exist or is not a directory:
+```json
+{
+  "type": "response",
+  "command": "change_cwd",
+  "success": false,
+  "error": "Cannot change working location to /nope: path does not exist"
+}
+```
+
 #### fork
 
 Create a new fork from a previous user message on the active branch. Can be cancelled by a `session_before_fork` extension event handler. Returns the text of the message being forked from.
@@ -928,8 +963,9 @@ Commands with source `builtin` are NOT invoked via `prompt`; each maps to RPC co
 | `/copy` | `get_last_assistant_text` |
 | `/fork` | `get_fork_messages` + `fork` |
 | `/clone` | `clone` |
+| `/cd <path>` | `change_cwd` |
 
-After state-changing builtin commands (`new`, `fork`, `clone`, `model`), clients should re-sync with `get_state` and `get_messages`.
+After state-changing builtin commands (`new`, `fork`, `clone`, `cd`, `model`), clients should re-sync with `get_state` and `get_messages`.
 - `location`: Where it was loaded from (optional, not present for extensions):
   - `"user"`: User-level (`~/.pi/agent/`)
   - `"project"`: Project-level (`./.pi/agent/`)

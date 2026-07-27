@@ -64,6 +64,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "export_html"; outputPath?: string }
 	| { id?: string; type: "switch_session"; sessionPath: string }
+	| { id?: string; type: "change_cwd"; cwd: string }
 	| { id?: string; type: "fork"; entryId: string }
 	| { id?: string; type: "clone" }
 	| { id?: string; type: "get_fork_messages" }
@@ -113,6 +114,7 @@ export const RPC_BUILTIN_COMMANDS: ReadonlyArray<{ name: string; description: st
 	{ name: "copy", description: "Copy last agent message to clipboard" },
 	{ name: "fork", description: "Create a new fork from a previous user message" },
 	{ name: "clone", description: "Duplicate the current session at the current position" },
+	{ name: "cd", description: "Change the session working location", argumentHint: "<path>" },
 ];
 
 // ============================================================================
@@ -121,6 +123,8 @@ export const RPC_BUILTIN_COMMANDS: ReadonlyArray<{ name: string; description: st
 
 export interface RpcSessionState {
 	model?: Model<any>;
+	/** Working location the session currently runs in. */
+	cwd: string;
 	thinkingLevel: ThinkingLevel;
 	isStreaming: boolean;
 	isCompacting: boolean;
@@ -222,6 +226,13 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "get_session_stats"; success: true; data: SessionStats }
 	| { id?: string; type: "response"; command: "export_html"; success: true; data: { path: string } }
 	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
+	| {
+			id?: string;
+			type: "response";
+			command: "change_cwd";
+			success: true;
+			data: { cancelled: boolean; cwd: string };
+	  }
 	| { id?: string; type: "response"; command: "fork"; success: true; data: { text: string; cancelled: boolean } }
 	| { id?: string; type: "response"; command: "clone"; success: true; data: { cancelled: boolean } }
 	| {

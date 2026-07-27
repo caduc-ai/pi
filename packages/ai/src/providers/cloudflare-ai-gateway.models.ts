@@ -20,6 +20,7 @@ type GeneratedModelGroups = {
 		"claude-opus-4-6": object;
 		"claude-opus-4-7": object;
 		"claude-opus-4-8": object;
+		"claude-opus-5": object;
 		"claude-sonnet-4": object;
 		"claude-sonnet-4-5": object;
 		"claude-sonnet-4-6": object;

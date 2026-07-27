@@ -678,6 +678,25 @@ export async function executeBuiltinCommand(text: string): Promise<boolean> {
 			await sync();
 			return true;
 		}
+		case "cd": {
+			if (!args) {
+				pushToast(`Working location: ${sessionState.value?.cwd ?? "unknown"}`, "info");
+				return true;
+			}
+			const response = await client.command({ type: "change_cwd", cwd: args });
+			if (!response.success) {
+				reportFailure(response, "Failed to change working location");
+				return true;
+			}
+			const changed = dataAs<{ cancelled: boolean; cwd: string }>(response, "change_cwd");
+			if (changed?.cancelled) {
+				pushToast("Change of working location cancelled", "info");
+				return true;
+			}
+			pushToast(`Working location: ${changed?.cwd ?? args}`, "info");
+			await sync();
+			return true;
+		}
 		default:
 			return false;
 	}

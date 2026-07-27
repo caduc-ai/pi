@@ -560,6 +560,7 @@ export class RpcBridge {
 			case "get_state": {
 				const state: RpcSessionState = {
 					model: session.model,
+					cwd: session.sessionManager.getCwd(),
 					thinkingLevel: session.thinkingLevel,
 					isStreaming: session.isStreaming,
 					isCompacting: session.isCompacting,
@@ -762,6 +763,18 @@ export class RpcBridge {
 					await this.rebindSession();
 				}
 				return success(id, "switch_session", result);
+			}
+
+			case "change_cwd": {
+				try {
+					const result = await this.runtimeHost.changeCwd(command.cwd);
+					if (!result.cancelled) {
+						await this.rebindSession();
+					}
+					return success(id, "change_cwd", result);
+				} catch (e) {
+					return error(id, "change_cwd", e instanceof Error ? e.message : String(e));
+				}
 			}
 
 			case "fork": {

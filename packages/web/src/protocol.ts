@@ -128,6 +128,8 @@ export interface Model {
 
 export interface RpcSessionState {
 	model?: Model;
+	/** Working location the session currently runs in. */
+	cwd: string;
 	thinkingLevel: ThinkingLevel;
 	isStreaming: boolean;
 	isCompacting: boolean;
@@ -205,6 +207,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_fork_messages" }
 	| { id?: string; type: "fork"; entryId: string }
 	| { id?: string; type: "clone" }
+	| { id?: string; type: "change_cwd"; cwd: string }
 	// Terminal: a persistent interactive shell, separate from the one-shot `bash`
 	// command. Payloads are base64-encoded raw terminal bytes.
 	| { id?: string; type: "terminal_open"; cols?: number; rows?: number }

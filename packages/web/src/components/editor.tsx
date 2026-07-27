@@ -36,6 +36,7 @@ const TUI_BUILTIN_COMMAND_ORDER = new Map(
 		"login",
 		"logout",
 		"new",
+		"cd",
 		"compact",
 		"resume",
 		"reload",
