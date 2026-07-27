@@ -736,17 +736,58 @@ function renderReviewPage(): string {
 		 * The merge happens on GitHub and cannot be undone from here, so the target is
 		 * confirmed rather than assumed, and outstanding review work is called out.
 		 */
+		/**
+		 * True when a merge failed only because the branch has no pull request.
+		 *
+		 * cranium reports this two ways: NO_PULL_REQUEST when it could ask and was
+		 * declined, and CONFIRMATION_REQUIRED when it could not prompt at all, which
+		 * is what the server always gets.
+		 */
+		function missingPullRequest(error) {
+			const text = String(error || "");
+			return /No GitHub pull request exists/.test(text) ||
+				/No open pull request exists for the current branch/.test(text);
+		}
+
 		/** Turn cranium's merge failures into something actionable. */
 		function explainMergeError(error) {
 			const text = String(error || "").trim();
 			if (/Cannot determine a GitHub repository from origin/.test(text)) {
 				return text + " - check the origin remote (git remote get-url origin) points at GitHub.";
 			}
-			if (/No GitHub pull request exists/.test(text)) {
-				return text + " - open a pull request for this branch first, " +
-					"or use Restart with no base/head to create one.";
+			if (missingPullRequest(text)) {
+				return "No open pull request exists for this branch, and creating one was declined.";
 			}
 			return text;
+		}
+
+		/**
+		 * Update the local repository after a merge lands on the remote.
+		 *
+		 * The base branch is usually not checked out, so it is fast-forwarded directly
+		 * as well; reviews resolve refs locally and would otherwise keep diffing against
+		 * the pre-merge commit.
+		 */
+		async function runGitPull(baseBranch) {
+			const repo = selectedRepo();
+			// Updating the base ref only applies when it is not the checked-out branch,
+			// which git refuses; on that branch the pull already covers it.
+			const command =
+				"git pull --ff-only && " +
+				'if [ "$(git rev-parse --abbrev-ref HEAD)" != "' + baseBranch + '" ]; then ' +
+				"git fetch origin " + baseBranch + ":" + baseBranch + "; fi";
+			try {
+				const res = await fetch("/api/bash", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ command: command, cwd: repo || undefined }),
+				});
+				const data = await res.json();
+				if (data.ok) return { ok: true };
+				return { ok: false, error: (data.error || data.output || "git pull failed").trim().split("\\n")[0] };
+			} catch (err) {
+				return { ok: false, error: err.message || "git pull failed" };
+			}
 		}
 
 		async function mergeReview() {
@@ -765,17 +806,36 @@ function renderReviewPage(): string {
 			button.disabled = true;
 			msg.textContent = "Merging…"; msg.className = "msg";
 			try {
-				const data = await api("POST", "/api/review/merge", { base: baseBranch, session: sessionId });
+				let data = await api("POST", "/api/review/merge", { base: baseBranch, session: sessionId });
+				// No pull request yet: offer to open one for this branch, then merge it.
+				if (!data.ok && missingPullRequest(data.error)) {
+					if (!confirm("No open pull request exists for this branch. Create one and merge it into " + baseBranch + "?")) {
+						msg.textContent = explainMergeError(data.error); msg.className = "msg error";
+						return;
+					}
+					msg.textContent = "Creating pull request…";
+					data = await api("POST", "/api/review/merge", {
+						base: baseBranch,
+						session: sessionId,
+						createPr: true,
+					});
+				}
 				if (!data.ok) {
 					msg.textContent = explainMergeError(data.error) || "Failed"; msg.className = "msg error";
 					return;
 				}
 				const result = data.data && data.data.result;
 				const pull = result && result.pull;
-				msg.textContent = pull
+				const merged = pull
 					? "Merged " + pull.identity + " into " + baseBranch + "."
 					: "Merged into " + baseBranch + ".";
-				msg.className = "msg success";
+				// The merge happened on GitHub, so pull to bring the local branches in line.
+				// Without this the local base ref stays behind and reviews diff against a
+				// stale commit.
+				msg.textContent = merged + " Pulling\u2026"; msg.className = "msg";
+				const pulled = await runGitPull(baseBranch);
+				msg.textContent = pulled.ok ? merged + " Pulled." : merged + " Pull failed: " + pulled.error;
+				msg.className = pulled.ok ? "msg success" : "msg error";
 				await loadBranch();
 				await loadStatus();
 			} finally {
@@ -1264,14 +1324,17 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 				body += chunk.toString();
 			});
 			request.on("end", () => {
-				const { base, session, repo } = JSON.parse(body) as {
+				const { base, session, repo, createPr } = JSON.parse(body) as {
 					base: string;
 					session?: string;
 					repo?: string;
+					createPr?: boolean;
 				};
 				const cwd = reviewCwd(url, repo);
 				// --json keeps errors machine-readable on stdout and wraps success in { result }
 				const args = ["review", "merge", "--base", base, "--yes", "--json"];
+				// cranium cannot prompt here, so opting in to creation must be explicit
+				if (createPr) args.push("--create-pr");
 				if (session) args.push("--session", session);
 				response.writeHead(200, { "content-type": "application/json" });
 				response.end(JSON.stringify(runCranium(args, { cwd })));
