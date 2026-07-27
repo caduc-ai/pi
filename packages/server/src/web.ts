@@ -330,7 +330,18 @@ function renderReviewPage(): string {
 		.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0.3em 0; }
 		.row label { margin: 0; flex: 1; min-width: 120px; }
 		.status { font-size: 0.85em; color: #999; }
+		.status.warn { color: #d7a55b; }
 		.status .num { color: #e6e6e6; font-weight: bold; }
+		.file-list { list-style: none; margin: 0.8em 0 0 0; padding: 0; border: 1px solid #2a2a2a; border-radius: 6px; overflow: hidden; }
+		.file-list li { border-top: 1px solid #1f1f1f; }
+		.file-list li:first-child { border-top: none; }
+		.file-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: #0a0a0a; border: none; border-radius: 0; color: #e6e6e6; font-size: 0.85em; padding: 10px 12px; min-height: 44px; }
+		.file-row:hover { background: #1a1a1a; }
+		.file-row .box { color: #666; flex-shrink: 0; }
+		.file-row.done .box { color: #60c060; }
+		.file-row.done .path { color: #7a7a7a; }
+		.file-row .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+		.file-row .tag { flex-shrink: 0; font-size: 0.85em; color: #d7a55b; }
 		.diff-view { background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 6px; padding: 0; overflow: auto; max-height: 60vh; -webkit-overflow-scrolling: touch; }
 		.diff-view pre { margin: 0; padding: 12px; font-size: 0.8em; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
 		.add { color: #60c060; }
@@ -379,20 +390,26 @@ function renderReviewPage(): string {
 		<div class="row" style="justify-content:space-between">
 			<h2 style="margin:0" id="review-title">Review</h2>
 			<div>
+				<button onclick="swapReview()" id="btn-swap" title="Restart this review with base and head exchanged">Swap base/head</button>
 				<button onclick="commitReview()" id="btn-commit" title="Keep what you have reviewed and pick up new commits">Commit review</button>
 				<button onclick="mergeReview()" id="btn-merge">Merge</button>
 				<button class="danger" onclick="clearReview()" title="Discard all review progress and start this review again">Restart</button>
 			</div>
 		</div>
 		<div id="review-status" class="status"></div>
+		<ul id="file-list" class="file-list hidden"></ul>
 		<div id="review-file" class="hidden">
 			<div class="row" style="justify-content:space-between; margin-top:0.8em">
-				<strong id="file-path"></strong>
+				<div class="row" style="flex:1; min-width:0; gap:8px; margin:0">
+					<button onclick="showSummary()" id="btn-back" title="Back to the file list">&larr; Files</button>
+					<strong id="file-path" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap"></strong>
+				</div>
 				<div>
 					<button onclick="markFile()" id="btn-mark">Mark reviewed</button>
 					<button onclick="nextFile()">Skip</button>
 				</div>
 			</div>
+			<div class="status" id="file-position"></div>
 			<div class="diff-view"><pre id="diff-content"></pre></div>
 		</div>
 		<div id="review-empty" class="status hidden">All files reviewed.</div>
@@ -419,6 +436,10 @@ function renderReviewPage(): string {
 		let sessionId = null;
 		let currentFile = null;
 		let currentFingerprint = null;
+		// Every file in the review, newest status first, as returned by cranium status
+		let reviewFiles = [];
+		// null on the summary view, otherwise the path of the file being reviewed
+		let openFile = null;
 		// Refs of the active session, so Clear can recreate the same review range
 		let activeBaseRef = null;
 		let activeHeadRef = null;
@@ -486,34 +507,153 @@ function renderReviewPage(): string {
 				"<span class=num>" + r.counts.reviewed + "</span> reviewed &middot; " +
 				"<span class=num>" + r.counts.changedSinceReview + "</span> changed";
 
-			if (r.counts.unreviewed > 0 || r.counts.changedSinceReview > 0) {
+			reviewFiles = Array.isArray(r.files) ? r.files : [];
+			renderFileList();
+
+			// A file open before the refresh stays open so marking one file does not
+			// throw away the diff the user is reading.
+			if (openFile !== null && reviewFiles.some((file) => file.path === openFile)) {
+				document.getElementById("file-list").classList.add("hidden");
 				document.getElementById("review-empty").classList.add("hidden");
-				await loadNext();
 			} else {
+				openFile = null;
 				document.getElementById("review-file").classList.add("hidden");
-				document.getElementById("review-empty").classList.remove("hidden");
+				const emptyEl = document.getElementById("review-empty");
+				// An empty range is not a finished review: with base and head the wrong way
+				// round the diff is empty, which must not look like "nothing left to do".
+				if (r.files.length === 0) {
+					emptyEl.innerHTML =
+						"No files in <strong>" + escapeRef(r.session.baseRef) + ".." + escapeRef(r.session.headRef) +
+						"</strong>. This range is empty \u2014 if the branches are the wrong way round, " +
+						"Restart the review with base <strong>" + escapeRef(r.session.headRef) + "</strong> and head <strong>" +
+						escapeRef(r.session.baseRef) + "</strong>.";
+					emptyEl.className = "status warn";
+					emptyEl.classList.remove("hidden");
+				} else if (r.counts.unreviewed === 0 && r.counts.changedSinceReview === 0) {
+					emptyEl.textContent = "All files reviewed.";
+					emptyEl.className = "status";
+					emptyEl.classList.remove("hidden");
+				} else {
+					// Files remain: the list itself is the view, so no empty message.
+					emptyEl.classList.add("hidden");
+				}
 			}
 		}
 
-		async function loadNext() {
-			const data = await api("POST", "/api/review/next", sessionId ? { session: sessionId } : {});
-			if (!data.ok || !data.data || !data.data.result) {
-				document.getElementById("review-file").classList.add("hidden");
-				document.getElementById("review-empty").classList.remove("hidden");
+		function isReviewed(status) {
+			return status === "reviewed" || status === "unchanged";
+		}
+
+		/** Files still needing attention, in the order the diff view walks them. */
+		function pendingFiles() {
+			return reviewFiles.filter((file) => !isReviewed(file.status));
+		}
+
+		/**
+		 * Render the summary: every file in the review with a tick when reviewed and an
+		 * empty box when not. Clicking a row drills into that file's diff.
+		 */
+		function renderFileList() {
+			const list = document.getElementById("file-list");
+			list.textContent = "";
+			if (reviewFiles.length === 0) {
+				list.classList.add("hidden");
 				return;
 			}
-			const file = data.data.result;
+			for (const file of reviewFiles) {
+				const done = isReviewed(file.status);
+				const item = document.createElement("li");
+				const row = document.createElement("button");
+				row.className = done ? "file-row done" : "file-row";
+				row.onclick = () => openReviewFile(file.path);
+
+				const box = document.createElement("span");
+				box.className = "box";
+				box.textContent = done ? "[x]" : "[ ]";
+				row.appendChild(box);
+
+				// bdi keeps the rtl ellipsis from reordering the path's own characters
+				const pathEl = document.createElement("bdi");
+				pathEl.className = "path";
+				pathEl.textContent = file.path;
+				row.appendChild(pathEl);
+
+				if (file.status === "changedSinceReview") {
+					const tag = document.createElement("span");
+					tag.className = "tag";
+					tag.textContent = "changed";
+					row.appendChild(tag);
+				}
+
+				item.appendChild(row);
+				list.appendChild(item);
+			}
+			list.classList.remove("hidden");
+		}
+
+		/** Show the file list and hide any open diff. */
+		function showSummary() {
+			openFile = null;
+			currentFile = null;
+			currentFingerprint = null;
+			document.getElementById("review-file").classList.add("hidden");
+			document.getElementById("review-msg").textContent = "";
+			return loadStatus();
+		}
+
+		/** Drill into one file's diff. */
+		async function openReviewFile(filePath) {
+			const file = reviewFiles.find((candidate) => candidate.path === filePath);
+			if (!file) return;
+			openFile = file.path;
 			currentFile = file.path;
 			currentFingerprint = file.currentFingerprint;
 			document.getElementById("file-path").textContent = file.path;
 			document.getElementById("review-file").classList.remove("hidden");
+			document.getElementById("file-list").classList.add("hidden");
 			document.getElementById("review-empty").classList.add("hidden");
+			document.getElementById("btn-mark").disabled = isReviewed(file.status);
 
+			const pending = pendingFiles();
+			const position = pending.findIndex((candidate) => candidate.path === file.path);
+			document.getElementById("file-position").textContent =
+				position === -1
+					? "Already reviewed"
+					: "File " + (position + 1) + " of " + pending.length + " to review";
+
+			document.getElementById("diff-content").textContent = "Loading\u2026";
 			const diffData = await api("GET",
 				"/api/review/diff?path=" + encodeURIComponent(file.path) +
 				(sessionId ? "&session=" + sessionId : ""));
+			// A slower diff for a file the user already navigated away from must not land
+			if (openFile !== file.path) return;
 			document.getElementById("diff-content").innerHTML =
 				highlightDiff((diffData.ok && typeof diffData.data === "string") ? diffData.data : "");
+			document.querySelector(".diff-view").scrollTop = 0;
+		}
+
+		function escapeRef(value) {
+			return String(value == null ? "" : value)
+				.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+		}
+
+		/**
+		 * Open the next file needing review after afterPath, wrapping to the start.
+		 * Returns to the summary when nothing is left.
+		 */
+		async function openNextPending(afterPath) {
+			const pending = pendingFiles();
+			if (pending.length === 0) {
+				showSummary();
+				return;
+			}
+			// Walk from the file just reviewed so marking advances in list order
+			const index = reviewFiles.findIndex((file) => file.path === afterPath);
+			const next =
+				reviewFiles
+					.slice(index + 1)
+					.find((file) => !isReviewed(file.status)) ?? pending[0];
+			await openReviewFile(next.path);
 		}
 
 		function highlightDiff(text) {
@@ -549,26 +689,42 @@ function renderReviewPage(): string {
 			}
 		}
 
+		/** Mark the open file reviewed, then move straight on to the next one. */
 		async function markFile() {
 			if (!currentFile) return;
+			const marked = currentFile;
 			const msg = document.getElementById("review-msg");
+			const button = document.getElementById("btn-mark");
+			button.disabled = true;
 			msg.textContent = "Marking…"; msg.className = "msg";
-			const data = await api("POST", "/api/review/mark", {
-				path: currentFile,
-				session: sessionId,
-				expected: currentFingerprint,
-			});
-			if (!data.ok) {
-				msg.textContent = data.error || "Failed"; msg.className = "msg error";
-			} else {
+			try {
+				const data = await api("POST", "/api/review/mark", {
+					path: marked,
+					session: sessionId,
+					expected: currentFingerprint,
+				});
+				if (!data.ok) {
+					msg.textContent = data.error || "Failed"; msg.className = "msg error";
+					button.disabled = false;
+					return;
+				}
 				msg.textContent = "";
-				await loadNext();
+				// Refresh statuses so the tick and the remaining count reflect the mark,
+				// keeping the current file open so loadStatus does not bounce to the list.
+				await loadStatus();
+				await openNextPending(marked);
+			} finally {
+				if (openFile !== null) {
+					const file = reviewFiles.find((candidate) => candidate.path === openFile);
+					button.disabled = file ? isReviewed(file.status) : false;
+				}
 			}
 		}
 
+		/** Leave the file unreviewed and move to the next one. */
 		async function nextFile() {
 			document.getElementById("review-msg").textContent = "";
-			await loadNext();
+			await openNextPending(currentFile);
 		}
 
 		async function mergeReview() {
@@ -609,6 +765,23 @@ function renderReviewPage(): string {
 		}
 
 		/**
+		 * Restart the review with base and head exchanged. Fixes a review created with
+		 * the branches the wrong way round, which produces an empty range.
+		 */
+		async function swapReview() {
+			const base = activeBaseRef;
+			const head = activeHeadRef;
+			if (!base || !head) {
+				const msg = document.getElementById("review-msg");
+				msg.textContent = "This review has no explicit base and head to swap.";
+				msg.className = "msg error";
+				return;
+			}
+			if (!confirm("Restart this review as " + head + ".." + base + "? Review progress will be discarded.")) return;
+			await restartReview({ base: head, head: base });
+		}
+
+		/**
 		 * Discard all review progress and start the same review over from scratch.
 		 *
 		 * cranium's start is idempotent (it refreshes an existing session instead of
@@ -618,10 +791,16 @@ function renderReviewPage(): string {
 		 */
 		async function clearReview() {
 			if (!confirm("Discard all review progress and start this review again?")) return;
-			const msg = document.getElementById("review-msg");
+			const fromPullRequest = activeProviderReviewId !== null && activeProviderReviewId !== undefined;
 			const base = activeBaseRef;
 			const head = activeHeadRef;
-			const fromPullRequest = activeProviderReviewId !== null && activeProviderReviewId !== undefined;
+			// A PR-backed session re-resolves its existing PR, so creation is never needed here.
+			await restartReview(fromPullRequest || !base || !head ? {} : { base: base, head: head });
+		}
+
+		/** Delete the current session, then start a new one with the given refs. */
+		async function restartReview(startBody) {
+			const msg = document.getElementById("review-msg");
 			msg.textContent = "Clearing\u2026"; msg.className = "msg";
 			const cleared = await api("POST", "/api/review/clear", sessionId ? { session: sessionId } : {});
 			if (!cleared.ok) {
@@ -633,10 +812,7 @@ function renderReviewPage(): string {
 			currentFingerprint = null;
 
 			msg.textContent = "Starting review\u2026";
-			// A PR-backed session re-resolves its existing PR, so creation is never needed here.
-			const started = await api("POST", "/api/review/start", fromPullRequest || !base || !head
-				? {}
-				: { base: base, head: head });
+			const started = await api("POST", "/api/review/start", startBody);
 			if (!started.ok) {
 				// The review is gone; fall back to the start panel so it can be recreated by hand
 				msg.textContent = started.error || "Cleared, but failed to start again";
@@ -648,6 +824,25 @@ function renderReviewPage(): string {
 			await loadBranch();
 			await loadStatus();
 		}
+
+		// Keyboard shortcuts mirroring the spacemacs review bindings: q returns to the
+		// file list, m marks reviewed and advances, n skips to the next file.
+		document.addEventListener("keydown", (event) => {
+			if (event.metaKey || event.ctrlKey || event.altKey) return;
+			const tag = event.target && event.target.tagName;
+			if (tag === "INPUT" || tag === "TEXTAREA") return;
+			if (openFile === null) return;
+			if (event.key === "q" || event.key === "Escape") {
+				event.preventDefault();
+				showSummary();
+			} else if (event.key === "m") {
+				event.preventDefault();
+				markFile();
+			} else if (event.key === "n") {
+				event.preventDefault();
+				nextFile();
+			}
+		});
 
 		loadBranch();
 		loadStatus();
