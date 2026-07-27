@@ -745,7 +745,7 @@ function renderReviewPage(): string {
 				? activeCounts.unreviewed + activeCounts.changedSinceReview
 				: 0;
 			const warning = outstanding > 0
-				? "\n\n" + outstanding + " file(s) are still unreviewed or changed since you reviewed them."
+				? "\\n\\n" + outstanding + " file(s) are still unreviewed or changed since you reviewed them."
 				: "";
 			if (!confirm("Merge the pull request for this branch into " + baseBranch + "?" + warning)) return;
 			button.disabled = true;
