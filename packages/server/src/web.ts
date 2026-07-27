@@ -735,6 +735,19 @@ function renderReviewPage(): string {
 		 * The merge happens on GitHub and cannot be undone from here, so the target is
 		 * confirmed rather than assumed, and outstanding review work is called out.
 		 */
+		/** Turn cranium's merge failures into something actionable. */
+		function explainMergeError(error) {
+			const text = String(error || "").trim();
+			if (/Cannot determine a GitHub repository from origin/.test(text)) {
+				return text + " - check the origin remote (git remote get-url origin) points at GitHub.";
+			}
+			if (/No GitHub pull request exists/.test(text)) {
+				return text + " - open a pull request for this branch first, " +
+					"or use Restart with no base/head to create one.";
+			}
+			return text;
+		}
+
 		async function mergeReview() {
 			const msg = document.getElementById("review-msg");
 			const button = document.getElementById("btn-merge");
@@ -753,7 +766,7 @@ function renderReviewPage(): string {
 			try {
 				const data = await api("POST", "/api/review/merge", { base: baseBranch, session: sessionId });
 				if (!data.ok) {
-					msg.textContent = data.error || "Failed"; msg.className = "msg error";
+					msg.textContent = explainMergeError(data.error) || "Failed"; msg.className = "msg error";
 					return;
 				}
 				const result = data.data && data.data.result;
@@ -1256,7 +1269,8 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 					repo?: string;
 				};
 				const cwd = reviewCwd(url, repo);
-				const args = ["review", "merge", "--base", base, "--yes"];
+				// --json keeps errors machine-readable on stdout and wraps success in { result }
+				const args = ["review", "merge", "--base", base, "--yes", "--json"];
 				if (session) args.push("--session", session);
 				response.writeHead(200, { "content-type": "application/json" });
 				response.end(JSON.stringify(runCranium(args, { cwd })));
