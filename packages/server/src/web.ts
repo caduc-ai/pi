@@ -396,6 +396,7 @@ function renderReviewPage(): string {
 				<button class="danger" onclick="clearReview()" title="Discard all review progress and start this review again">Restart</button>
 			</div>
 		</div>
+		<div id="review-action-msg" class="msg"></div>
 		<div id="review-status" class="status"></div>
 		<ul id="file-list" class="file-list hidden"></ul>
 		<div id="review-file" class="hidden">
@@ -749,7 +750,7 @@ function renderReviewPage(): string {
 		}
 
 		async function mergeReview() {
-			const msg = document.getElementById("review-msg");
+			const msg = document.getElementById("review-action-msg");
 			const button = document.getElementById("btn-merge");
 			const target = window.prompt("Merge this branch's pull request into which branch?", "main");
 			if (target === null) return;
@@ -788,7 +789,7 @@ function renderReviewPage(): string {
 		 * only what moved since you reviewed them, and new commits add new files.
 		 */
 		async function commitReview() {
-			const msg = document.getElementById("review-msg");
+			const msg = document.getElementById("review-action-msg");
 			const button = document.getElementById("btn-commit");
 			button.disabled = true;
 			msg.textContent = "Committing review\u2026"; msg.className = "msg";
@@ -815,7 +816,7 @@ function renderReviewPage(): string {
 			const base = activeBaseRef;
 			const head = activeHeadRef;
 			if (!base || !head) {
-				const msg = document.getElementById("review-msg");
+				const msg = document.getElementById("review-action-msg");
 				msg.textContent = "This review has no explicit base and head to swap.";
 				msg.className = "msg error";
 				return;
@@ -843,7 +844,7 @@ function renderReviewPage(): string {
 
 		/** Delete the current session, then start a new one with the given refs. */
 		async function restartReview(startBody) {
-			const msg = document.getElementById("review-msg");
+			const msg = document.getElementById("review-action-msg");
 			msg.textContent = "Clearing\u2026"; msg.className = "msg";
 			const cleared = await api("POST", "/api/review/clear", sessionId ? { session: sessionId } : {});
 			if (!cleared.ok) {
