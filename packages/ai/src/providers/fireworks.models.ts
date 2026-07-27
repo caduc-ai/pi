@@ -8,7 +8,6 @@ type GeneratedModelGroups = {
 	"anthropic-messages": {
 		"accounts/fireworks/models/deepseek-v4-flash": object;
 		"accounts/fireworks/models/deepseek-v4-pro": object;
-		"accounts/fireworks/models/glm-5p1": object;
 		"accounts/fireworks/models/gpt-oss-120b": object;
 		"accounts/fireworks/models/gpt-oss-20b": object;
 		"accounts/fireworks/models/kimi-k2p6": object;
@@ -16,7 +15,6 @@ type GeneratedModelGroups = {
 		"accounts/fireworks/models/minimax-m2p7": object;
 		"accounts/fireworks/models/minimax-m3": object;
 		"accounts/fireworks/models/qwen3p7-plus": object;
-		"accounts/fireworks/routers/glm-5p1-fast": object;
 		"accounts/fireworks/routers/kimi-k2p6-fast": object;
 		"accounts/fireworks/routers/kimi-k2p6-turbo": object;
 		"accounts/fireworks/routers/kimi-k2p7-code-fast": object;

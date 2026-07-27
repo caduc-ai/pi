@@ -965,6 +965,21 @@ select.theme-toggle {
    Terminal panel (persistent shell, separate from bash chat messages)
    ========================================================================== */
 
+.header-review {
+	align-items: center;
+	border-radius: 3px;
+	color: var(--pi-muted);
+	display: flex;
+	flex-shrink: 0;
+	margin-left: auto;
+	padding: 2px;
+}
+
+.header-review:hover {
+	background: var(--pi-bgHover);
+	color: var(--pi-fg);
+}
+
 .header-terminal {
 	background: none;
 	border: 1px solid var(--pi-borderMuted);
@@ -973,7 +988,6 @@ select.theme-toggle {
 	cursor: pointer;
 	font-family: inherit;
 	font-size: 12px;
-	margin-left: auto;
 	padding: 2px 7px;
 }
 

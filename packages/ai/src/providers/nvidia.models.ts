@@ -12,7 +12,6 @@ type GeneratedModelGroups = {
 		"meta/llama-3.2-90b-vision-instruct": object;
 		"meta/llama-3.3-70b-instruct": object;
 		"minimaxai/minimax-m3": object;
-		"mistralai/mistral-small-4-119b-2603": object;
 		"moonshotai/kimi-k2.6": object;
 		"nvidia/nemotron-3-nano-30b-a3b": object;
 		"nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": object;
@@ -21,7 +20,6 @@ type GeneratedModelGroups = {
 		"nvidia/nvidia-nemotron-nano-9b-v2": object;
 		"openai/gpt-oss-120b": object;
 		"openai/gpt-oss-20b": object;
-		"stepfun-ai/step-3.5-flash": object;
 		"stepfun-ai/step-3.7-flash": object;
 		"z-ai/glm-5.2": object;
 	};

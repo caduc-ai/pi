@@ -176,11 +176,13 @@ function cloneInstance(record: InstanceRecord): InstanceRecord {
 // runtime state only, so forcing a follow-up get_state after every command is wasted IO.
 //
 // - new_session / switch_session / fork / clone can change sessionId/sessionFile
+// - change_cwd moves the session to another working location, changing cwd and sessionFile
 // - set_session_name changes a persisted session detail we may want reflected externally
 // - prompt can materialize or advance persisted session state after the child processes it
 const SESSION_METADATA_COMMANDS: ReadonlySet<RpcCommand["type"]> = new Set([
 	"new_session",
 	"switch_session",
+	"change_cwd",
 	"fork",
 	"clone",
 	"set_session_name",
@@ -195,7 +197,7 @@ function isGetStateSuccess(
 	response: RpcResponse,
 ): response is Extract<
 	RpcResponse,
-	{ success: true; command: "get_state"; data: { sessionId: string; sessionFile?: string } }
+	{ success: true; command: "get_state"; data: { sessionId: string; sessionFile?: string; cwd: string } }
 > {
 	return response.success === true && response.command === "get_state" && "data" in response;
 }
@@ -297,9 +299,12 @@ export class ServerSupervisor {
 			this.updateRecord(live, {});
 			return;
 		}
+		// cwd follows the session: /cd moves the instance's working location, and the
+		// dashboard review link is built from the record's cwd.
 		this.updateRecord(live, {
 			sessionId: response.data.sessionId,
 			sessionFile: response.data.sessionFile,
+			...(response.data.cwd ? { cwd: response.data.cwd } : {}),
 		});
 	}
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai/compat";
@@ -530,6 +530,128 @@ describe("AgentSessionRuntime characterization", () => {
 
 		expect(realpathSync(runtime.session.sessionManager.getCwd())).toBe(realpathSync(secondDir));
 		expect(realpathSync(runtime.cwd)).toBe(realpathSync(secondDir));
+	});
+
+	it("moves the session to a new working location and keeps history", async () => {
+		const firstDir = join(tmpdir(), `pi-runtime-cd-a-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const secondDir = join(tmpdir(), `pi-runtime-cd-b-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(firstDir, { recursive: true });
+		mkdirSync(secondDir, { recursive: true });
+		cleanups.push(() => {
+			rmSync(secondDir, { recursive: true, force: true });
+		});
+		const events: RecordedSessionEvent[] = [];
+		const { runtime } = await createRuntimeForTest(
+			(pi: ExtensionAPI) => {
+				pi.on("session_before_switch", (event) => {
+					events.push(event);
+				});
+				pi.on("session_shutdown", (event) => {
+					events.push(event);
+				});
+				pi.on("session_start", (event) => {
+					events.push(event);
+				});
+			},
+			{ cwd: firstDir },
+		);
+
+		await runtime.session.prompt("hello");
+		const previousSessionFile = runtime.session.sessionFile;
+		const beforeTexts = runtime.session.messages
+			.filter((message) => message.role === "user")
+			.map((message) => JSON.stringify(message.content));
+		events.length = 0;
+
+		const result = await runtime.changeCwd(secondDir);
+		await runtime.session.bindExtensions({});
+
+		expect(result.cancelled).toBe(false);
+		expect(realpathSync(result.cwd)).toBe(realpathSync(secondDir));
+		expect(realpathSync(runtime.cwd)).toBe(realpathSync(secondDir));
+		expect(realpathSync(runtime.session.sessionManager.getCwd())).toBe(realpathSync(secondDir));
+		// Forked into the target cwd, so the session lives in a new file there.
+		expect(runtime.session.sessionFile).not.toBe(previousSessionFile);
+		expect(
+			runtime.session.messages
+				.filter((message) => message.role === "user")
+				.map((message) => JSON.stringify(message.content)),
+		).toEqual(beforeTexts);
+		expect(events).toEqual([
+			{ type: "session_before_switch", reason: "change_cwd", targetSessionFile: undefined },
+			{ type: "session_shutdown", reason: "change_cwd", targetSessionFile: runtime.session.sessionFile },
+			{ type: "session_start", reason: "change_cwd", previousSessionFile },
+		]);
+	});
+
+	it("rejects working locations that are missing or not a directory", async () => {
+		const { runtime, tempDir } = await createRuntimeForTest(() => {});
+		const originalCwd = runtime.cwd;
+		const originalSession = runtime.session;
+
+		const missing = join(tempDir, "does-not-exist");
+		await expect(runtime.changeCwd(missing)).rejects.toThrow("path does not exist");
+
+		const filePath = join(tempDir, "a-file.txt");
+		writeFileSync(filePath, "not a directory");
+		await expect(runtime.changeCwd(filePath)).rejects.toThrow("path is not a directory");
+
+		// A rejected change must leave the running session untouched.
+		expect(runtime.cwd).toBe(originalCwd);
+		expect(runtime.session).toBe(originalSession);
+	});
+
+	it("honors session_before_switch cancellation for a working location change", async () => {
+		const targetDir = join(tmpdir(), `pi-runtime-cd-cancel-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(targetDir, { recursive: true });
+		cleanups.push(() => {
+			rmSync(targetDir, { recursive: true, force: true });
+		});
+		const { runtime } = await createRuntimeForTest((pi: ExtensionAPI) => {
+			pi.on("session_before_switch", (event) => {
+				if (event.reason === "change_cwd") {
+					return { cancel: true };
+				}
+			});
+		});
+		const originalCwd = runtime.cwd;
+
+		const result = await runtime.changeCwd(targetDir);
+
+		expect(result.cancelled).toBe(true);
+		expect(runtime.cwd).toBe(originalCwd);
+	});
+
+	it("treats a change to the current working location as a no-op", async () => {
+		const { runtime } = await createRuntimeForTest(() => {});
+		const originalSession = runtime.session;
+
+		const result = await runtime.changeCwd(runtime.cwd);
+
+		expect(result).toEqual({ cancelled: false, cwd: runtime.cwd });
+		expect(runtime.session).toBe(originalSession);
+	});
+
+	it("carries in-memory history to the new working location", async () => {
+		const targetDir = join(tmpdir(), `pi-runtime-cd-mem-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(targetDir, { recursive: true });
+		cleanups.push(() => {
+			rmSync(targetDir, { recursive: true, force: true });
+		});
+		const { runtime } = await createRuntimeForTest(() => {});
+		// The initial session has never been flushed, so there is no file to fork from.
+		expect(existsSync(runtime.session.sessionFile!)).toBe(false);
+		const entryIdsBefore = runtime.session.sessionManager.getEntries().map((entry) => entry.id);
+		expect(entryIdsBefore.length).toBeGreaterThan(0);
+
+		const result = await runtime.changeCwd(targetDir);
+
+		expect(result.cancelled).toBe(false);
+		expect(realpathSync(runtime.cwd)).toBe(realpathSync(targetDir));
+		// Entry ids survive the move so branch structure stays intact. The new runtime
+		// appends its own startup entries on top, so only the prefix has to match.
+		const entryIdsAfter = runtime.session.sessionManager.getEntries().map((entry) => entry.id);
+		expect(entryIdsAfter.slice(0, entryIdsBefore.length)).toEqual(entryIdsBefore);
 	});
 
 	it("restores model and thinking state from the destination session", async () => {

@@ -1570,6 +1570,23 @@ export class SessionManager {
 	}
 
 	/**
+	 * Create an in-memory session in a target cwd carrying another session's history.
+	 *
+	 * The in-memory counterpart of {@link forkFrom}, used when the source session has
+	 * nothing on disk to fork. Entry ids and parent links are preserved so the branch
+	 * structure survives the move.
+	 * @param source Session manager to copy history from
+	 * @param targetCwd Target working directory (stored in the new session header)
+	 */
+	static inMemoryFrom(source: SessionManager, targetCwd: string): SessionManager {
+		const manager = new SessionManager(targetCwd, "", undefined, false);
+		const header = manager.fileEntries[0] as SessionHeader;
+		manager.fileEntries = [header, ...source.fileEntries.filter((entry) => entry.type !== "session")];
+		manager._buildIndex();
+		return manager;
+	}
+
+	/**
 	 * Fork a session from another project directory into the current project.
 	 * Creates a new session in the target cwd with the full history from the source session.
 	 * @param sourcePath Path to the source session file

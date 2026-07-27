@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { resolvePath } from "../utils/paths.ts";
 import type { AgentSession } from "./agent-session.ts";
@@ -50,6 +50,19 @@ export class SessionImportFileNotFoundError extends Error {
 		super(`File not found: ${filePath}`);
 		this.name = "SessionImportFileNotFoundError";
 		this.filePath = filePath;
+	}
+}
+
+/**
+ * Thrown when /cd targets a path that does not exist or is not a directory.
+ */
+export class InvalidWorkingLocationError extends Error {
+	readonly targetCwd: string;
+
+	constructor(targetCwd: string, detail: string) {
+		super(`Cannot change working location to ${targetCwd}: ${detail}`);
+		this.name = "InvalidWorkingLocationError";
+		this.targetCwd = targetCwd;
 	}
 }
 
@@ -131,7 +144,7 @@ export class AgentSessionRuntime {
 	}
 
 	private async emitBeforeSwitch(
-		reason: "new" | "resume",
+		reason: "new" | "resume" | "change_cwd",
 		targetSessionFile?: string,
 	): Promise<{ cancelled: boolean }> {
 		const runner = this.session.extensionRunner;
@@ -218,6 +231,64 @@ export class AgentSessionRuntime {
 		);
 		await this.finishSessionReplacement(options?.withSession);
 		return { cancelled: false };
+	}
+
+	/**
+	 * Change the working location of the running session.
+	 *
+	 * The current history is forked into a new session file under the target
+	 * cwd's session directory, so the session stays discoverable from its own
+	 * working location. All cwd-bound services (settings, extensions, skills,
+	 * context files) are recreated for the target cwd.
+	 *
+	 * @returns `{ cancelled: true }` when cancelled by `session_before_switch`.
+	 * @throws {InvalidWorkingLocationError} When the target path is missing or not a directory.
+	 */
+	async changeCwd(
+		targetCwd: string,
+		options?: {
+			withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
+			projectTrustContextFactory?: (cwd: string) => ProjectTrustContext;
+		},
+	): Promise<{ cancelled: boolean; cwd: string }> {
+		const resolvedCwd = resolvePath(targetCwd);
+		if (!existsSync(resolvedCwd)) {
+			throw new InvalidWorkingLocationError(resolvedCwd, "path does not exist");
+		}
+		if (!statSync(resolvedCwd).isDirectory()) {
+			throw new InvalidWorkingLocationError(resolvedCwd, "path is not a directory");
+		}
+		if (resolvedCwd === this.cwd) {
+			return { cancelled: false, cwd: resolvedCwd };
+		}
+
+		const beforeResult = await this.emitBeforeSwitch("change_cwd");
+		if (beforeResult.cancelled) {
+			return { cancelled: true, cwd: this.cwd };
+		}
+
+		const previousSessionFile = this.session.sessionFile;
+		const currentSessionManager = this.session.sessionManager;
+		let sessionManager: SessionManager;
+		if (currentSessionManager.isPersisted() && previousSessionFile && existsSync(previousSessionFile)) {
+			sessionManager = SessionManager.forkFrom(previousSessionFile, resolvedCwd);
+		} else {
+			// Nothing on disk to fork from: carry the in-memory history across instead.
+			sessionManager = SessionManager.inMemoryFrom(currentSessionManager, resolvedCwd);
+		}
+
+		await this.teardownCurrent("change_cwd", sessionManager.getSessionFile());
+		this.apply(
+			await this.createRuntime({
+				cwd: resolvedCwd,
+				agentDir: this.services.agentDir,
+				sessionManager,
+				sessionStartEvent: { type: "session_start", reason: "change_cwd", previousSessionFile },
+				projectTrustContext: options?.projectTrustContextFactory?.(resolvedCwd),
+			}),
+		);
+		await this.finishSessionReplacement(options?.withSession);
+		return { cancelled: false, cwd: resolvedCwd };
 	}
 
 	async newSession(options?: {

@@ -69,6 +69,7 @@ class SessionViewBridge {
 				const state: RpcSessionState = {
 					// Session entries only store provider/modelId, not a full Model
 					model: undefined,
+					cwd: header?.cwd ?? "",
 					thinkingLevel: context.thinkingLevel as RpcSessionState["thinkingLevel"],
 					isStreaming: false,
 					isCompacting: false,

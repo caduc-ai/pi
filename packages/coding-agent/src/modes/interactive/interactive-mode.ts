@@ -52,7 +52,11 @@ import {
 	VERSION,
 } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
-import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
+import {
+	type AgentSessionRuntime,
+	InvalidWorkingLocationError,
+	SessionImportFileNotFoundError,
+} from "../../core/agent-session-runtime.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -96,7 +100,7 @@ import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelo
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
-import { getCwdRelativePath } from "../../utils/paths.ts";
+import { getCwdRelativePath, resolvePath } from "../../utils/paths.ts";
 import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { renderQrCodeLines } from "../../utils/qr.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
@@ -204,6 +208,12 @@ function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionE
 }
 
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
+
+/**
+ * /gas: stage everything, commit, and push. Chained with && so a rejected commit
+ * (pre-commit hook failure, or nothing staged) stops before pushing.
+ */
+const GAS_COMMAND = 'git add -A && git commit -m "😊" && git push';
 
 function isDeadTerminalError(error: unknown): boolean {
 	if (!error || typeof error !== "object" || !("code" in error)) {
@@ -2872,6 +2882,22 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
+			if (text === "/cd" || text.startsWith("/cd ")) {
+				const target = text.startsWith("/cd ") ? text.slice(4).trim() : undefined;
+				this.editor.setText("");
+				await this.handleChangeWorkingLocationCommand(target || undefined);
+				return;
+			}
+			if (text === "/gas") {
+				if (this.session.isBashRunning) {
+					this.showWarning("A bash command is already running. Press Esc to cancel it first.");
+					return;
+				}
+				this.editor.addToHistory?.(text);
+				this.editor.setText("");
+				await this.handleBashCommand(GAS_COMMAND);
+				return;
+			}
 			if (text === "/quit") {
 				this.editor.setText("");
 				await this.shutdown();
@@ -4932,6 +4958,39 @@ export class InteractiveMode {
 				return result;
 			}
 			return this.handleFatalRuntimeError("Failed to resume session", error);
+		}
+	}
+
+	/**
+	 * Move the session to a different working location.
+	 *
+	 * With no argument this just reports the current location. Changing location
+	 * forks the history into the target directory and reloads every cwd-bound
+	 * resource, so project extensions, skills, and context files change with it.
+	 */
+	private async handleChangeWorkingLocationCommand(argument: string | undefined): Promise<void> {
+		if (!argument) {
+			this.showStatus(`Working location: ${this.sessionManager.getCwd()}`);
+			return;
+		}
+
+		this.clearStatusIndicator();
+		const targetCwd = resolvePath(argument);
+		try {
+			const result = await this.runtimeHost.changeCwd(targetCwd, {
+				projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
+			});
+			if (result.cancelled) {
+				this.showStatus("Change of working location cancelled");
+				return;
+			}
+			this.showStatus(`Working location: ${result.cwd}`);
+		} catch (error: unknown) {
+			if (error instanceof InvalidWorkingLocationError) {
+				this.showError(error.message);
+				return;
+			}
+			return this.handleFatalRuntimeError("Failed to change working location", error);
 		}
 	}
 

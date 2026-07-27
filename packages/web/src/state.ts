@@ -70,6 +70,8 @@ export function pushToast(message: string, kind: Toast["kind"] = "info"): void {
 // the WS endpoint is always at <base>ws.
 const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
 const basePath = location.pathname.endsWith("/") ? location.pathname : `${location.pathname}/`;
+/** Supervised instance id when served by pi-server, undefined under `pi --web`. */
+export const instanceId = /^\/i\/([0-9a-f-]{36})\//.exec(basePath)?.[1];
 export const client = new RpcClient(`${wsProtocol}://${location.host}${basePath}ws`, {
 	onEvent: handleEvent,
 	onUiRequest: handleUiRequest,
@@ -485,6 +487,12 @@ function formatTokenCount(count: number): string {
 	return String(count);
 }
 
+/**
+ * /gas: stage everything, commit, and push. Chained with && so a rejected commit
+ * (pre-commit hook failure, or nothing staged) stops before pushing.
+ */
+const GAS_COMMAND = 'git add -A && git commit -m "\u{1F60A}" && git push';
+
 /** Run a bash command (! prefix in the editor). */
 export async function sendBash(command: string): Promise<void> {
 	if (command.trim() === "") return;
@@ -675,6 +683,29 @@ export async function executeBuiltinCommand(text: string): Promise<boolean> {
 				return true;
 			}
 			pushToast("Cloned session", "info");
+			await sync();
+			return true;
+		}
+		case "gas": {
+			await sendBash(GAS_COMMAND);
+			return true;
+		}
+		case "cd": {
+			if (!args) {
+				pushToast(`Working location: ${sessionState.value?.cwd ?? "unknown"}`, "info");
+				return true;
+			}
+			const response = await client.command({ type: "change_cwd", cwd: args });
+			if (!response.success) {
+				reportFailure(response, "Failed to change working location");
+				return true;
+			}
+			const changed = dataAs<{ cancelled: boolean; cwd: string }>(response, "change_cwd");
+			if (changed?.cancelled) {
+				pushToast("Change of working location cancelled", "info");
+				return true;
+			}
+			pushToast(`Working location: ${changed?.cwd ?? args}`, "info");
 			await sync();
 			return true;
 		}
