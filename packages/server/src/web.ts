@@ -392,7 +392,7 @@ function renderReviewPage(): string {
 			<div>
 				<button onclick="swapReview()" id="btn-swap" title="Restart this review with base and head exchanged">Swap base/head</button>
 				<button onclick="commitReview()" id="btn-commit" title="Keep what you have reviewed and pick up new commits">Commit review</button>
-				<button onclick="mergeReview()" id="btn-merge">Merge</button>
+				<button onclick="mergeReview()" id="btn-merge" title="Merge this branch's pull request on GitHub">Merge PR</button>
 				<button class="danger" onclick="clearReview()" title="Discard all review progress and start this review again">Restart</button>
 			</div>
 		</div>
@@ -444,6 +444,7 @@ function renderReviewPage(): string {
 		let activeBaseRef = null;
 		let activeHeadRef = null;
 		let activeProviderReviewId = null;
+		let activeCounts = null;
 
 		function selectedRepo() {
 			return document.getElementById("start-repo").value.trim() || repoCwd;
@@ -497,6 +498,7 @@ function renderReviewPage(): string {
 			activeBaseRef = r.session.baseRef;
 			activeHeadRef = r.session.headRef;
 			activeProviderReviewId = r.session.providerReviewId;
+			activeCounts = r.counts;
 			startPanel.classList.add("hidden");
 			activePanel.classList.remove("hidden");
 
@@ -727,15 +729,43 @@ function renderReviewPage(): string {
 			await openNextPending(currentFile);
 		}
 
+		/**
+		 * Merge this branch's GitHub pull request into a target branch (default main).
+		 *
+		 * The merge happens on GitHub and cannot be undone from here, so the target is
+		 * confirmed rather than assumed, and outstanding review work is called out.
+		 */
 		async function mergeReview() {
 			const msg = document.getElementById("review-msg");
+			const button = document.getElementById("btn-merge");
+			const target = window.prompt("Merge this branch's pull request into which branch?", "main");
+			if (target === null) return;
+			const baseBranch = target.trim() || "main";
+			const outstanding = activeCounts
+				? activeCounts.unreviewed + activeCounts.changedSinceReview
+				: 0;
+			const warning = outstanding > 0
+				? "\n\n" + outstanding + " file(s) are still unreviewed or changed since you reviewed them."
+				: "";
+			if (!confirm("Merge the pull request for this branch into " + baseBranch + "?" + warning)) return;
+			button.disabled = true;
 			msg.textContent = "Merging…"; msg.className = "msg";
-			const data = await api("POST", "/api/review/merge", { base: "main", session: sessionId });
-			if (!data.ok) {
-				msg.textContent = data.error || "Failed"; msg.className = "msg error";
-			} else {
-				msg.textContent = "Merged."; msg.className = "msg success";
+			try {
+				const data = await api("POST", "/api/review/merge", { base: baseBranch, session: sessionId });
+				if (!data.ok) {
+					msg.textContent = data.error || "Failed"; msg.className = "msg error";
+					return;
+				}
+				const result = data.data && data.data.result;
+				const pull = result && result.pull;
+				msg.textContent = pull
+					? "Merged " + pull.identity + " into " + baseBranch + "."
+					: "Merged into " + baseBranch + ".";
+				msg.className = "msg success";
+				await loadBranch();
 				await loadStatus();
+			} finally {
+				button.disabled = false;
 			}
 		}
 
