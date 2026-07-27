@@ -70,6 +70,7 @@ const CONTENT_TYPES: Record<string, string> = {
 	".css": "text/css; charset=utf-8",
 	".json": "application/json",
 	".map": "application/json",
+	".webmanifest": "application/manifest+json",
 	".svg": "image/svg+xml",
 	".png": "image/png",
 	".jpg": "image/jpeg",
@@ -1381,20 +1382,27 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			return;
 		}
 
-		// Instance SPA paths fall through to index.html; static assets are global
+		// Instance SPA paths fall through to index.html. Static assets are also served under
+		// each instance prefix so relative PWA manifest/service-worker URLs keep the
+		// installed app scoped to that instance.
 		const instanceMatch = INSTANCE_PATH_PATTERN.exec(url.pathname);
-		const relativePath = decodeURIComponent(url.pathname).replace(/^\/+/, "");
+		if (instanceMatch && !supervisor.getLiveInstance(instanceMatch[1])) {
+			sendText(response, 404, "Unknown instance\n");
+			return;
+		}
+		const instancePrefix = instanceMatch ? `/i/${instanceMatch[1]}/` : undefined;
+		const relativePath = decodeURIComponent(
+			instancePrefix && url.pathname.startsWith(instancePrefix)
+				? url.pathname.slice(instancePrefix.length)
+				: url.pathname.replace(/^\/+/, ""),
+		);
 		const filePath = path.normalize(path.join(staticDir, relativePath));
 		if (!filePath.startsWith(staticDir)) {
 			sendText(response, 403, "Forbidden\n");
 			return;
 		}
-		if (!instanceMatch && relativePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+		if (relativePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
 			sendFile(response, filePath, relativePath.startsWith("assets/"));
-			return;
-		}
-		if (instanceMatch && !supervisor.getLiveInstance(instanceMatch[1])) {
-			sendText(response, 404, "Unknown instance\n");
 			return;
 		}
 		sendFile(response, indexPath, false);

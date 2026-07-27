@@ -9,6 +9,16 @@ void initTheme().catch(() => {
 	// Theme endpoint unavailable (e.g. running without the bridge); CSS fallbacks apply.
 });
 
+if ("serviceWorker" in navigator) {
+	window.addEventListener("load", () => {
+		const instanceBase = /^\/i\/[0-9a-f-]{36}(?:\/|$)/.exec(location.pathname)?.[0];
+		const scope = instanceBase ? (instanceBase.endsWith("/") ? instanceBase : `${instanceBase}/`) : "/";
+		void navigator.serviceWorker.register(`${scope}pwa-sw.js`, { scope }).catch(() => {
+			// Service workers are unavailable on insecure non-local origins and in some embedded browsers.
+		});
+	});
+}
+
 client.start();
 
 const container = document.getElementById("app");

@@ -1,0 +1,32 @@
+{
+	"name": "pi",
+	"short_name": "pi",
+	"description": "Web UI for pi coding agent sessions",
+	"start_url": ".",
+	"scope": ".",
+	"display": "standalone",
+	"display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+	"orientation": "any",
+	"theme_color": "#18181e",
+	"background_color": "#18181e",
+	"icons": [
+		{
+			"src": "icons/pi.svg",
+			"sizes": "any",
+			"type": "image/svg+xml",
+			"purpose": "any maskable"
+		},
+		{
+			"src": "icons/pi-192.png",
+			"sizes": "192x192",
+			"type": "image/png",
+			"purpose": "any maskable"
+		},
+		{
+			"src": "icons/pi-512.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "any maskable"
+		}
+	]
+}

@@ -14,6 +14,7 @@
 - Added `/gas` to stage all changes, commit with a `😊` message, and push, in the TUI and the web UI. The steps are chained with `&&`, so a rejected commit (pre-commit hook failure, or nothing staged) stops before pushing.
 - Added `/cd <path>` to change a session's working location mid-flight, in the TUI and over RPC (new `change_cwd` command; `get_state` now reports `cwd`). The session history is forked into a new session file under the target directory so the session stays discoverable from its own working location, and all cwd-bound resources (settings, extensions, skills, context files) are reloaded for the new directory. See [rpc.md](docs/rpc.md#change_cwd).
 - Added a persistent terminal to the RPC protocol: `terminal_open`, `terminal_input`, `terminal_resize`, and `terminal_close` commands plus `terminal_output` and `terminal_exit` events. Unlike the one-shot `bash` command, the terminal is a single interactive shell that lives for the whole pi run, so `cd`, environment variables, shell functions, and running processes persist across commands, and interactive programs work on a real tty. It is backed by a tmux session (`pi-<pid>-<random>`), survives clients attaching/detaching and `switch_session`, and requires `tmux` on the host. Terminal output is display-only: it is never recorded in session history and never sent to the model. See [rpc.md](docs/rpc.md#terminal).
+- Added PWA manifest MIME support for `pi --web`, allowing the web UI's install metadata to be served correctly.
 
 ## [0.82.1] - 2026-07-25
 

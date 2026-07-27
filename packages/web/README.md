@@ -20,6 +20,10 @@ npm run dev --workspace=@earendil-works/pi-web
 
 Then open http://localhost:5173.
 
+## Mobile install
+
+The web UI includes PWA metadata and can be installed to the home screen in standalone mode. Browsers generally require a secure origin for true PWA install: HTTPS, or `localhost` during development. Plain HTTP over a LAN IP may fall back to a bookmark with browser chrome.
+
 Bridge environment variables:
 
 - `PI_WEB_BRIDGE_PORT` — bridge listen port (default `4464`)
