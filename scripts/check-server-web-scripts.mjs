@@ -10,7 +10,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,14 +18,13 @@ import { pathToFileURL } from "node:url";
 const repoRoot = resolve(import.meta.dirname, "..");
 const webModule = resolve(repoRoot, "packages/server/dist/web.js");
 
-let startServerWeb;
-try {
-	({ startServerWeb } = await import(pathToFileURL(webModule).href));
-} catch (error) {
-	console.error(`Cannot load ${webModule}. Build the server first: npm run build`);
-	console.error(error instanceof Error ? error.message : String(error));
-	process.exit(1);
+// dist is gitignored, so a fresh checkout has nothing to render yet.
+if (!existsSync(webModule)) {
+	console.log("Skipping: packages/server/dist is not built.");
+	process.exit(0);
 }
+
+const { startServerWeb } = await import(pathToFileURL(webModule).href);
 
 // An isolated data directory keeps this off any real server state.
 process.env.PI_SERVER_DIR = mkdtempSync(join(tmpdir(), "pi-web-scripts-state-"));
