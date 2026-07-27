@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a "Commit review" button to the review page (see below), and changed the review page's "Clear" button to "Restart": it now discards the session and immediately starts a new review over the same range (or the same pull request), instead of leaving no review behind. It asks for confirmation first, and falls back to the start panel if the new review cannot be created.
 - Added a "Commit review" button to the review page, backed by a new `POST /api/review/refresh` endpoint (`cranium review refresh`). It re-anchors the review to the repository's current HEAD while keeping existing checkpoints, so files reviewed at an older revision come back as changed showing only what moved since you reviewed them, and files touched by new commits are added as unreviewed.
 - Added the current git branch to the review page header, backed by a new `GET /api/git/branch?repo=<path>` endpoint. The badge is hidden on detached HEAD or outside a git repo, and refreshes when the repo changes or `--create-pr` moves HEAD.
 - Added tracking of a session's working location: when a session changes location with `/cd`, the supervised instance record follows it, so the dashboard's review link targets the session's current directory.

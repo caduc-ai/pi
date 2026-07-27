@@ -378,7 +378,7 @@ function renderReviewPage(): string {
 			<div>
 				<button onclick="commitReview()" id="btn-commit" title="Keep what you have reviewed and pick up new commits">Commit review</button>
 				<button onclick="mergeReview()" id="btn-merge">Merge</button>
-				<button class="danger" onclick="clearReview()">Clear</button>
+				<button class="danger" onclick="clearReview()" title="Discard all review progress and start this review again">Restart</button>
 			</div>
 		</div>
 		<div id="review-status" class="status"></div>
@@ -409,6 +409,10 @@ function renderReviewPage(): string {
 		let sessionId = null;
 		let currentFile = null;
 		let currentFingerprint = null;
+		// Refs of the active session, so Clear can recreate the same review range
+		let activeBaseRef = null;
+		let activeHeadRef = null;
+		let activeProviderReviewId = null;
 
 		function selectedRepo() {
 			return document.getElementById("start-repo").value.trim() || repoCwd;
@@ -459,6 +463,9 @@ function renderReviewPage(): string {
 			}
 			const r = data.data.result;
 			sessionId = r.session.id;
+			activeBaseRef = r.session.baseRef;
+			activeHeadRef = r.session.headRef;
+			activeProviderReviewId = r.session.providerReviewId;
 			startPanel.classList.add("hidden");
 			activePanel.classList.remove("hidden");
 
@@ -591,10 +598,44 @@ function renderReviewPage(): string {
 			}
 		}
 
+		/**
+		 * Discard all review progress and start the same review over from scratch.
+		 *
+		 * cranium's start is idempotent (it refreshes an existing session instead of
+		 * recreating it), so the old session must be deleted first. The session's own
+		 * refs are reused so the new review covers the same range; a PR-backed session
+		 * re-resolves the PR instead.
+		 */
 		async function clearReview() {
-			await api("POST", "/api/review/clear", sessionId ? { session: sessionId } : {});
+			if (!confirm("Discard all review progress and start this review again?")) return;
+			const msg = document.getElementById("review-msg");
+			const base = activeBaseRef;
+			const head = activeHeadRef;
+			const fromPullRequest = activeProviderReviewId !== null && activeProviderReviewId !== undefined;
+			msg.textContent = "Clearing\u2026"; msg.className = "msg";
+			const cleared = await api("POST", "/api/review/clear", sessionId ? { session: sessionId } : {});
+			if (!cleared.ok) {
+				msg.textContent = cleared.error || "Failed to clear"; msg.className = "msg error";
+				return;
+			}
 			sessionId = null;
 			currentFile = null;
+			currentFingerprint = null;
+
+			msg.textContent = "Starting review\u2026";
+			// A PR-backed session re-resolves its existing PR, so creation is never needed here.
+			const started = await api("POST", "/api/review/start", fromPullRequest || !base || !head
+				? {}
+				: { base: base, head: head });
+			if (!started.ok) {
+				// The review is gone; fall back to the start panel so it can be recreated by hand
+				msg.textContent = started.error || "Cleared, but failed to start again";
+				msg.className = "msg error";
+				await loadStatus();
+				return;
+			}
+			msg.textContent = "";
+			await loadBranch();
 			await loadStatus();
 		}
 
