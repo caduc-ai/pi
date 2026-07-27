@@ -736,15 +736,27 @@ function renderReviewPage(): string {
 		 * The merge happens on GitHub and cannot be undone from here, so the target is
 		 * confirmed rather than assumed, and outstanding review work is called out.
 		 */
+		/**
+		 * True when a merge failed only because the branch has no pull request.
+		 *
+		 * cranium reports this two ways: NO_PULL_REQUEST when it could ask and was
+		 * declined, and CONFIRMATION_REQUIRED when it could not prompt at all, which
+		 * is what the server always gets.
+		 */
+		function missingPullRequest(error) {
+			const text = String(error || "");
+			return /No GitHub pull request exists/.test(text) ||
+				/No open pull request exists for the current branch/.test(text);
+		}
+
 		/** Turn cranium's merge failures into something actionable. */
 		function explainMergeError(error) {
 			const text = String(error || "").trim();
 			if (/Cannot determine a GitHub repository from origin/.test(text)) {
 				return text + " - check the origin remote (git remote get-url origin) points at GitHub.";
 			}
-			if (/No GitHub pull request exists/.test(text)) {
-				return text + " - open a pull request for this branch first, " +
-					"or use Restart with no base/head to create one.";
+			if (missingPullRequest(text)) {
+				return "No open pull request exists for this branch, and creating one was declined.";
 			}
 			return text;
 		}
@@ -765,7 +777,20 @@ function renderReviewPage(): string {
 			button.disabled = true;
 			msg.textContent = "Merging…"; msg.className = "msg";
 			try {
-				const data = await api("POST", "/api/review/merge", { base: baseBranch, session: sessionId });
+				let data = await api("POST", "/api/review/merge", { base: baseBranch, session: sessionId });
+				// No pull request yet: offer to open one for this branch, then merge it.
+				if (!data.ok && missingPullRequest(data.error)) {
+					if (!confirm("No open pull request exists for this branch. Create one and merge it into " + baseBranch + "?")) {
+						msg.textContent = explainMergeError(data.error); msg.className = "msg error";
+						return;
+					}
+					msg.textContent = "Creating pull request…";
+					data = await api("POST", "/api/review/merge", {
+						base: baseBranch,
+						session: sessionId,
+						createPr: true,
+					});
+				}
 				if (!data.ok) {
 					msg.textContent = explainMergeError(data.error) || "Failed"; msg.className = "msg error";
 					return;
@@ -1264,14 +1289,17 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 				body += chunk.toString();
 			});
 			request.on("end", () => {
-				const { base, session, repo } = JSON.parse(body) as {
+				const { base, session, repo, createPr } = JSON.parse(body) as {
 					base: string;
 					session?: string;
 					repo?: string;
+					createPr?: boolean;
 				};
 				const cwd = reviewCwd(url, repo);
 				// --json keeps errors machine-readable on stdout and wraps success in { result }
 				const args = ["review", "merge", "--base", base, "--yes", "--json"];
+				// cranium cannot prompt here, so opting in to creation must be explicit
+				if (createPr) args.push("--create-pr");
 				if (session) args.push("--session", session);
 				response.writeHead(200, { "content-type": "application/json" });
 				response.end(JSON.stringify(runCranium(args, { cwd })));
