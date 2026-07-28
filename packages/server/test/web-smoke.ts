@@ -138,6 +138,18 @@ try {
 	if (!indexHtml.includes('href="/terminal"')) pass("index: terminal link absent");
 	else fail("index: terminal link present");
 
+	if (indexHtml.includes('rel="manifest" href="/manifest.webmanifest"')) pass("index: PWA manifest linked");
+	else fail("index: PWA manifest link missing");
+
+	if (indexHtml.includes('rel="apple-touch-icon" href="/icons/pi-180.png"')) pass("index: apple touch icon linked");
+	else fail("index: apple touch icon missing");
+
+	if (indexHtml.includes('navigator.serviceWorker.register("/pwa-sw.js", { scope: "/" })')) {
+		pass("index: service worker registered");
+	} else {
+		fail("index: service worker registration missing");
+	}
+
 	if (cssBracesBalanced(indexHtml)) pass("index: CSS braces balanced");
 	else fail("index: CSS braces unbalanced");
 
@@ -194,6 +206,28 @@ try {
 	const reviewJsError = jsSyntaxValid(reviewHtml);
 	if (reviewJsError === null) pass("review: JS syntax valid");
 	else fail(`review: ${reviewJsError}`);
+
+	// ---- PWA asset tests ----
+	const manifestRes = await fetch(`${serverUrl}/manifest.webmanifest`);
+	if (manifestRes.status === 200 && manifestRes.headers.get("content-type")?.includes("application/manifest+json")) {
+		pass("PWA: manifest served with manifest content type");
+	} else {
+		fail(`PWA: manifest response invalid (${manifestRes.status}, ${manifestRes.headers.get("content-type")})`);
+	}
+	const manifest = (await manifestRes.json()) as { display?: string; icons?: unknown[] };
+	if (manifest.display === "standalone") pass("PWA: manifest requests standalone display");
+	else fail("PWA: manifest standalone display missing");
+	if (Array.isArray(manifest.icons) && manifest.icons.length > 0) pass("PWA: manifest icons present");
+	else fail("PWA: manifest icons missing");
+
+	const serviceWorkerRes = await fetch(`${serverUrl}/pwa-sw.js`);
+	if (serviceWorkerRes.status === 200 && serviceWorkerRes.headers.get("content-type")?.includes("text/javascript")) {
+		pass("PWA: service worker served as JavaScript");
+	} else {
+		fail(
+			`PWA: service worker response invalid (${serviceWorkerRes.status}, ${serviceWorkerRes.headers.get("content-type")})`,
+		);
+	}
 
 	// ---- API tests ----
 	const sessionsRes = await fetch(`${serverUrl}/api/sessions?cwd=.`);
