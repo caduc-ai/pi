@@ -150,7 +150,15 @@ function renderIndexPage(): string {
 <html lang="en">
 <head>
 	<meta charset="UTF-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+	<meta name="theme-color" content="#18181e" />
+	<meta name="mobile-web-app-capable" content="yes" />
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<meta name="apple-mobile-web-app-title" content="pi" />
+	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+	<link rel="manifest" href="/manifest.webmanifest" />
+	<link rel="icon" href="/icons/pi.svg" type="image/svg+xml" />
+	<link rel="apple-touch-icon" href="/icons/pi-180.png" />
 	<title>pi server</title>
 	<style>
 		*, *::before, *::after { box-sizing: border-box; }
@@ -203,6 +211,14 @@ ${items}
 		<div class="spawn-result" id="spawn-result"></div>
 	</div>
 	<script>
+		if ("serviceWorker" in navigator) {
+			window.addEventListener("load", function() {
+				navigator.serviceWorker.register("/pwa-sw.js", { scope: "/" }).catch(function() {
+					// Service workers are unavailable on insecure non-local origins and in some embedded browsers.
+				});
+			});
+		}
+
 		async function spawnSession(event) {
 			event.preventDefault();
 			const resultEl = document.getElementById("spawn-result");
