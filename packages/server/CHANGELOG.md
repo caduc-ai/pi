@@ -18,6 +18,7 @@
 - Added tracking of a session's working location: when a session changes location with `/cd`, the supervised instance record follows it, so the dashboard's review link targets the session's current directory.
 - Added `server serve --web [--web-port <port>] [--web-host <host>]`: serves the pi web UI for all supervised instances with token auth (instance index at `/`, per-instance UI at `/i/<id>/`, RPC protocol over WebSocket at `/i/<id>/ws`).
 - Added PWA asset serving for per-instance web UI paths, so installing `/i/<id>/` to a mobile home screen keeps the standalone app scoped to that session.
+- Added PWA metadata and service worker registration to the server home page, so Android browsers can install it from Add to home screen on supported secure origins.
 
 ### Fixed
 
