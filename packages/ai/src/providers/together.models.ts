@@ -17,6 +17,7 @@ type GeneratedModelGroups = {
 		"meta-llama/Llama-3.3-70B-Instruct-Turbo": object;
 		"moonshotai/Kimi-K2.6": object;
 		"moonshotai/Kimi-K2.7-Code": object;
+		"moonshotai/Kimi-K3": object;
 		"nvidia/nemotron-3-ultra-550b-a55b": object;
 		"openai/gpt-oss-120b": object;
 		"openai/gpt-oss-20b": object;

@@ -43,6 +43,7 @@ type GeneratedModelGroups = {
 		"moonshotai/Kimi-K2.5": object;
 		"moonshotai/Kimi-K2.6": object;
 		"moonshotai/Kimi-K2.7-Code": object;
+		"moonshotai/Kimi-K3": object;
 		"openai/gpt-oss-120b": object;
 		"openai/gpt-oss-20b": object;
 		"stepfun-ai/Step-3.5-Flash": object;

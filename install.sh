@@ -3,8 +3,9 @@ set -euo pipefail
 
 # install.sh — install pi and pi-server wrappers for development
 #
-# Creates thin wrappers that run the TypeScript source directly via tsx,
-# matching how pi-test.sh works. No build step needed.
+# Installs workspace dependencies, then creates thin wrappers that run the
+# TypeScript source directly via tsx, matching how pi-test.sh works. No build
+# step needed.
 #
 # Usage:
 #   ./install.sh                  # install to /usr/local/bin (default)
@@ -15,6 +16,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="${PREFIX:-${1:-/usr/local/bin}}"
 TSX="$REPO_ROOT/node_modules/.bin/tsx"
 TSCONFIG="$REPO_ROOT/tsconfig.json"
+
+if ! command -v npm >/dev/null 2>&1; then
+	echo "error: npm is required to install dependencies" >&2
+	exit 1
+fi
+
+echo "==> Installing dependencies"
+npm --prefix "$REPO_ROOT" install --ignore-scripts
 
 mkdir -p "$PREFIX"
 

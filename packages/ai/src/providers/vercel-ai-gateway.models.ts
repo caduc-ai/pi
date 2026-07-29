@@ -28,6 +28,7 @@ type GeneratedModelGroups = {
 		"alibaba/qwen3.5-plus": object;
 		"alibaba/qwen3.6-27b": object;
 		"alibaba/qwen3.6-plus": object;
+		"alibaba/qwen3.7-flash": object;
 		"alibaba/qwen3.7-max": object;
 		"alibaba/qwen3.7-plus": object;
 		"amazon/nova-2-lite": object;
@@ -67,7 +68,6 @@ type GeneratedModelGroups = {
 		"google/gemini-2.5-flash-lite": object;
 		"google/gemini-2.5-pro": object;
 		"google/gemini-3-flash": object;
-		"google/gemini-3-pro-preview": object;
 		"google/gemini-3.1-flash-lite": object;
 		"google/gemini-3.1-pro-preview": object;
 		"google/gemini-3.5-flash": object;
@@ -118,6 +118,7 @@ type GeneratedModelGroups = {
 		"moonshotai/kimi-k2.7-code": object;
 		"moonshotai/kimi-k2.7-code-highspeed": object;
 		"moonshotai/kimi-k3": object;
+		"moonshotai/kimi-k3-fast": object;
 		"nvidia/nemotron-3-nano-30b-a3b": object;
 		"nvidia/nemotron-3-super-120b-a12b": object;
 		"nvidia/nemotron-3-ultra-550b-a55b": object;
