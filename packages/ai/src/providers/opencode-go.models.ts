@@ -25,6 +25,7 @@ type GeneratedModelGroups = {
 		"qwen3.6-plus": object;
 	};
 	"openai-responses": {
+		"gpt-5.6-luna": object;
 		"grok-4.5": object;
 	};
 };

@@ -40,6 +40,7 @@ type GeneratedModelGroups = {
 		"kimi-k2.5": object;
 		"kimi-k2.6": object;
 		"kimi-k2.7-code": object;
+		"kimi-k3": object;
 		"laguna-s-2.1-free": object;
 		"ling-3.0-flash-free": object;
 		"mimo-v2.5-free": object;
