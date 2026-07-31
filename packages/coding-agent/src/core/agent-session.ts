@@ -63,6 +63,7 @@ import {
 	shouldCompact,
 } from "./compaction/index.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
+import type { EventBus } from "./event-bus.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
 import {
@@ -1534,6 +1535,15 @@ export class AgentSession {
 
 	get resourceLoader(): ResourceLoader {
 		return this._resourceLoader;
+	}
+
+	/**
+	 * Channel-based event bus shared with extensions (pi.events), used to
+	 * observe extension-emitted events such as pi-subagents run lifecycle
+	 * notifications. Undefined when the resource loader does not expose one.
+	 */
+	get extensionEvents(): EventBus | undefined {
+		return this._resourceLoader.getExtensionEventBus?.();
 	}
 
 	/**

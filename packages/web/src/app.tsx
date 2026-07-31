@@ -4,8 +4,19 @@ import { Editor } from "./components/editor.tsx";
 import { Footer } from "./components/footer.tsx";
 import { MarkdownView } from "./components/markdown-view.tsx";
 import { ForkPicker, ModelPicker } from "./components/pickers.tsx";
+import { SubagentsPanel } from "./components/subagents.tsx";
 import { TerminalView } from "./components/terminal.tsx";
-import { commandResult, connected, instanceId, sessionState, terminalOpen, widgets } from "./state.ts";
+import {
+	activePanel,
+	commandResult,
+	connected,
+	instanceId,
+	sessionState,
+	subagentRuns,
+	terminalOpen,
+	toggleSubagentsPanel,
+	widgets,
+} from "./state.ts";
 
 function Header() {
 	const name = sessionState.value?.sessionName;
@@ -41,6 +52,17 @@ function Header() {
 					</svg>
 				</a>
 			) : null}
+			<button
+				type="button"
+				class={`header-subagents ${activePanel.value === "subagents" ? "active" : ""}`}
+				title="Inspect subagent runs"
+				onClick={toggleSubagentsPanel}
+			>
+				subagents
+				{subagentRuns.value.length > 0 ? (
+					<span class="header-subagents-count">{subagentRuns.value.length}</span>
+				) : null}
+			</button>
 			<button
 				type="button"
 				class={`header-terminal ${terminalOpen.value ? "active" : ""}`}
@@ -100,12 +122,18 @@ export function App() {
 	return (
 		<div class="app">
 			<Header />
-			<ChatList />
+			{activePanel.value === "subagents" ? (
+				<SubagentsPanel />
+			) : (
+				<>
+					<ChatList />
+					<CommandResultCard />
+					<WidgetArea placement="aboveEditor" />
+					<Editor />
+					<WidgetArea placement="belowEditor" />
+				</>
+			)}
 			<TerminalView />
-			<CommandResultCard />
-			<WidgetArea placement="aboveEditor" />
-			<Editor />
-			<WidgetArea placement="belowEditor" />
 			<Footer />
 			<DialogHost />
 			<ToastHost />

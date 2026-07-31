@@ -7,6 +7,8 @@
  * - GET /                     instance index (links to each instance)
  * - GET /i/<id>/              the pi web UI for that instance (SPA)
  * - WS  /i/<id>/ws            RPC protocol stream for that instance
+ * - GET /i/<id>/subagents     subagent runs for that instance (pi-subagents artifacts)
+ * - GET /i/<id>/subagents/file?path=<rel>  a subagent transcript/output artifact
  * - GET /review               cranium code review UI
  * - GET /themes, /theme/*     TUI theme files, shared by all instances
  */
@@ -14,7 +16,7 @@
 import { execFileSync, execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
 import {
 	getCustomThemesDir,
@@ -128,6 +130,217 @@ function resolveThemeFile(name: string): string | undefined {
 		}
 	}
 	return undefined;
+}
+
+// ============================================================================
+// Subagent inspection (pi-subagents extension artifacts)
+//
+// The pi-subagents extension persists per-run data under <cwd>/.pi-subagents/:
+//   artifacts/<runId>_<agent>_<index>_transcript.jsonl  live child event stream
+//   artifacts/<runId>_<agent>_<index>_meta.json         written when the run ends
+//   artifacts/<runId>_<agent>_<index>_output.md         final output
+//   artifacts/outputs/<runId>/<file>                    named output artifacts
+// Async (background) runs live in the user-scoped temp dir with status.json
+// files that carry the originating sessionId.
+// ============================================================================
+
+const SUBAGENT_ARTIFACTS_DIR = ".pi-subagents/artifacts";
+const MAX_SUBAGENT_FILE_BYTES = 4 * 1024 * 1024;
+
+interface SubagentRunSummary {
+	key: string;
+	source: "foreground" | "async";
+	runId: string;
+	agent: string;
+	status: "running" | "done" | "failed";
+	startedAt?: number;
+	endedAt?: number;
+	durationMs?: number;
+	model?: string;
+	task?: string;
+	exitCode?: number;
+	error?: string;
+	usage?: Record<string, unknown>;
+	toolCount?: number;
+	transcriptPath?: string;
+	transcriptBytes?: number;
+	outputPath?: string;
+	outputs?: Array<{ name: string; path: string; bytes: number }>;
+}
+
+function readJsonFile<T>(filePath: string): T | undefined {
+	try {
+		return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
+	} catch {
+		return undefined;
+	}
+}
+
+function fileBytes(filePath: string): number | undefined {
+	try {
+		return fs.statSync(filePath).size;
+	} catch {
+		return undefined;
+	}
+}
+
+function subagentStatus(exitCode: unknown): "running" | "done" | "failed" {
+	if (typeof exitCode !== "number") return "running";
+	return exitCode === 0 ? "done" : "failed";
+}
+
+/** Temp dir used by the pi-subagents extension for async runs (mirrors its scoping). */
+function subagentAsyncDir(): string {
+	const getuid = process.getuid?.bind(process);
+	let scope: string;
+	if (typeof getuid === "function") {
+		scope = `uid-${getuid()}`;
+	} else {
+		const user = process.env.USERNAME ?? process.env.USER ?? process.env.LOGNAME;
+		scope = user ? `user-${user.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "unknown"}` : "shared";
+	}
+	return path.join(tmpdir(), `pi-subagents-${scope}`, "async-subagent-runs");
+}
+
+/** List subagent runs visible to an instance, newest first. */
+function listSubagentRuns(cwd: string, sessionFile?: string): SubagentRunSummary[] {
+	const runs = new Map<string, SubagentRunSummary>();
+	const artifactsDir = path.join(cwd, SUBAGENT_ARTIFACTS_DIR);
+	const foregroundRunIds = new Set<string>();
+
+	if (fs.existsSync(artifactsDir)) {
+		let files: string[];
+		try {
+			files = fs.readdirSync(artifactsDir);
+		} catch {
+			files = [];
+		}
+
+		// Meta files (written at run end) carry authoritative metadata.
+		const metas = new Map<string, Record<string, unknown>>();
+		for (const file of files) {
+			const match = /^(.+)_meta\.json$/.exec(file);
+			if (!match) continue;
+			const meta = readJsonFile<Record<string, unknown>>(path.join(artifactsDir, file));
+			if (meta) metas.set(match[1], meta);
+		}
+
+		// Transcript files exist for the whole run (including live runs).
+		for (const file of files) {
+			const match = /^(.+)_transcript\.jsonl$/.exec(file);
+			if (!match) continue;
+			const base = match[1];
+			const transcriptPath = path.join("artifacts", file);
+			const bytes = fileBytes(path.join(artifactsDir, file));
+			const meta = metas.get(base);
+			const runId = (meta?.runId as string | undefined) ?? base.split("_")[0] ?? base;
+			const agent = (meta?.agent as string | undefined) ?? (base.split("_").slice(1, -1).join("_") || "subagent");
+			foregroundRunIds.add(runId);
+			runs.set(`foreground:${base}`, {
+				key: `foreground:${base}`,
+				source: "foreground",
+				runId,
+				agent,
+				status: subagentStatus(meta?.exitCode),
+				startedAt: typeof meta?.timestamp === "number" ? (meta.timestamp as number) : undefined,
+				durationMs: meta?.durationMs as number | undefined,
+				model: meta?.model as string | undefined,
+				task: meta?.task as string | undefined,
+				exitCode: meta?.exitCode as number | undefined,
+				error: meta?.error as string | undefined,
+				usage: meta?.usage as Record<string, unknown> | undefined,
+				toolCount: meta?.toolCount as number | undefined,
+				transcriptPath,
+				transcriptBytes: bytes,
+				outputPath: fs.existsSync(path.join(artifactsDir, `${base}_output.md`))
+					? path.join("artifacts", `${base}_output.md`)
+					: undefined,
+			});
+		}
+
+		// Named outputs per runId (outputs/<runId>/).
+		if (fs.existsSync(path.join(artifactsDir, "outputs"))) {
+			try {
+				for (const runDir of fs.readdirSync(path.join(artifactsDir, "outputs"))) {
+					const outputs: SubagentRunSummary["outputs"] = [];
+					const outputsPath = path.join(artifactsDir, "outputs", runDir);
+					if (!fs.statSync(outputsPath).isDirectory()) continue;
+					for (const file of fs.readdirSync(outputsPath)) {
+						const bytes = fileBytes(path.join(outputsPath, file));
+						if (bytes === undefined) continue;
+						outputs.push({ name: file, path: path.join("artifacts", "outputs", runDir, file), bytes });
+					}
+					if (outputs.length === 0) continue;
+					const run = [...runs.values()].find((candidate) => candidate.runId === runDir);
+					if (run) {
+						run.outputs = outputs;
+					} else {
+						runs.set(`foreground:outputs:${runDir}`, {
+							key: `foreground:outputs:${runDir}`,
+							source: "foreground",
+							runId: runDir,
+							agent: "subagent",
+							status: "done",
+							outputs,
+						});
+					}
+				}
+			} catch {
+				// outputs dir unreadable: skip
+			}
+		}
+	}
+
+	// Async (background) runs: status.json per dir under the user-scoped temp dir.
+	// The extension records the originating session FILE PATH in status.sessionId,
+	// and async runs that also write project artifacts are already listed above.
+	if (sessionFile) {
+		const asyncDir = subagentAsyncDir();
+		if (fs.existsSync(asyncDir)) {
+			try {
+				for (const dirName of fs.readdirSync(asyncDir)) {
+					const dir = path.join(asyncDir, dirName);
+					if (!fs.statSync(dir).isDirectory()) continue;
+					const status = readJsonFile<Record<string, unknown>>(path.join(dir, "status.json"));
+					if (!status || status.sessionId !== sessionFile) continue;
+					const runId = (status.runId as string | undefined) ?? dirName;
+					if (foregroundRunIds.has(runId)) continue;
+					const state = status.state as string | undefined;
+					const agents = Array.isArray(status.steps)
+						? (status.steps as Array<{ agent?: string }>).map((step) => step.agent ?? "subagent")
+						: [(status.mode as string | undefined) ?? "subagent"];
+					runs.set(`async:${dirName}`, {
+						key: `async:${dirName}`,
+						source: "async",
+						runId,
+						agent: agents.join(" -> "),
+						status:
+							state === "complete" ? "done" : state === "failed" || state === "stopped" ? "failed" : "running",
+						startedAt: status.startedAt as number | undefined,
+						endedAt: status.endedAt as number | undefined,
+						error: status.error as string | undefined,
+						task: status.description as string | undefined,
+					});
+				}
+			} catch {
+				// async dir unreadable: skip
+			}
+		}
+	}
+
+	return [...runs.values()].sort((left, right) => {
+		const leftAt = left.startedAt ?? 0;
+		const rightAt = right.startedAt ?? 0;
+		return rightAt - leftAt || left.key.localeCompare(right.key);
+	});
+}
+
+/** Resolve a path relative to the instance's .pi-subagents dir, rejecting escapes. */
+function resolveSubagentArtifact(cwd: string, relative: string): string | undefined {
+	const base = path.join(cwd, ".pi-subagents");
+	const resolved = path.resolve(base, relative);
+	if (resolved !== base && !resolved.startsWith(base + path.sep)) return undefined;
+	return resolved;
 }
 
 function escapeHtml(text: string): string {
@@ -1173,6 +1386,56 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 				});
 			return;
 		}
+		// Subagent inspection API (pi-subagents extension).
+		// GET /i/<id>/subagents — list subagent runs for an instance
+		const subagentsMatch = /^\/i\/([0-9a-f-]{36})\/subagents$/.exec(url.pathname);
+		if (request.method === "GET" && subagentsMatch) {
+			const instance = supervisor.getLiveInstance(subagentsMatch[1]);
+			if (!instance) {
+				sendText(response, 404, "Unknown instance\n");
+				return;
+			}
+			response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+			response.end(JSON.stringify({ ok: true, runs: listSubagentRuns(instance.cwd, instance.sessionFile) }));
+			return;
+		}
+
+		// GET /i/<id>/subagents/file?path=<relative> — read a subagent artifact file
+		// (transcript, output, or named output). Paths are the ones returned by the
+		// listing above and must resolve inside the instance's artifacts dir.
+		const subagentsFileMatch = /^\/i\/([0-9a-f-]{36})\/subagents\/file$/.exec(url.pathname);
+		if (request.method === "GET" && subagentsFileMatch) {
+			const instance = supervisor.getLiveInstance(subagentsFileMatch[1]);
+			if (!instance) {
+				sendText(response, 404, "Unknown instance\n");
+				return;
+			}
+			const relative = url.searchParams.get("path") ?? "";
+			const filePath = resolveSubagentArtifact(instance.cwd, relative);
+			if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+				sendText(response, 404, "Not found\n");
+				return;
+			}
+			const bytes = fs.statSync(filePath).size;
+			const truncated = bytes > MAX_SUBAGENT_FILE_BYTES;
+			const content = fs.readFileSync(filePath, "utf-8");
+			const contentType =
+				path.extname(filePath).toLowerCase() === ".json" ? "application/json" : "text/plain; charset=utf-8";
+			response.writeHead(200, { "content-type": contentType, "cache-control": "no-cache" });
+			response.end(
+				JSON.stringify({
+					ok: true,
+					path: relative,
+					bytes: Math.min(bytes, MAX_SUBAGENT_FILE_BYTES),
+					truncated,
+					content: truncated
+						? `${content.slice(0, MAX_SUBAGENT_FILE_BYTES)}\n\n[... truncated at ${MAX_SUBAGENT_FILE_BYTES} bytes]`
+						: content,
+				}),
+			);
+			return;
+		}
+
 		// Terminal API
 		if (url.pathname === "/api/bash" && request.method === "POST") {
 			let body = "";

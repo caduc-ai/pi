@@ -11,6 +11,8 @@ import type {
 	RpcSessionState,
 	RpcSlashCommand,
 	SessionStats,
+	SubagentFileData,
+	SubagentRunSummary,
 	ToolResultLike,
 	ToolResultMessage,
 } from "./protocol.ts";
@@ -125,6 +127,7 @@ async function sync(): Promise<void> {
 		if (sessionState.value?.isStreaming) {
 			workingMessage.value = "Working";
 		}
+		void refreshSubagents();
 	} catch (error) {
 		pushToast(`Failed to sync session state: ${error instanceof Error ? error.message : String(error)}`, "error");
 	} finally {
@@ -255,6 +258,10 @@ function applyEvent(event: AgentSessionEvent): void {
 				output: undefined,
 				isError: undefined,
 			});
+			// Subagent runs start/stop via the subagent tool; refresh instantly.
+			if (event.toolName === "subagent") {
+				void refreshSubagents();
+			}
 			break;
 
 		case "tool_execution_update":
@@ -269,6 +276,9 @@ function applyEvent(event: AgentSessionEvent): void {
 				output: extractResultText(event.result),
 				isError: event.isError,
 			});
+			if (event.toolName === "subagent") {
+				void refreshSubagents();
+			}
 			break;
 
 		case "agent_start":
@@ -354,6 +364,15 @@ function applyEvent(event: AgentSessionEvent): void {
 
 		case "extension_error":
 			pushToast(`Extension error: ${event.error}`, "error");
+			break;
+
+		case "extension_event":
+			// Push-based subagent updates: pi-subagents emits lifecycle events on
+			// subagent:* / subagents:* channels; refresh immediately instead of
+			// waiting for the next poll.
+			if (event.channel.startsWith("subagent:") || event.channel.startsWith("subagents:")) {
+				void refreshSubagents();
+			}
 			break;
 
 		case "terminal_output":
@@ -480,6 +499,122 @@ let terminalOutputSeq = 0;
 export const commandResult = signal<{ title: string; markdown: string } | undefined>(undefined);
 export const modelPickerOpen = signal(false);
 export const forkPickerOpen = signal(false);
+
+// ============================================================================
+// Subagent inspection panel
+// ============================================================================
+
+export type SubagentView = "transcript" | "output" | "outputs";
+
+export const activePanel = signal<"chat" | "subagents">("chat");
+export const subagentRuns = signal<SubagentRunSummary[]>([]);
+export const selectedRunKey = signal<string | undefined>(undefined);
+export const subagentView = signal<SubagentView>("transcript");
+export const subagentFile = signal<SubagentFileData | undefined>(undefined);
+export const subagentLoading = signal(false);
+export const subagentPolling = signal(false);
+
+export function toggleSubagentsPanel(): void {
+	activePanel.value = activePanel.value === "subagents" ? "chat" : "subagents";
+}
+
+/** REST endpoints live under the same base path as the app (e.g. /i/<id>/subagents). */
+async function fetchSubagentJson<T>(path: string): Promise<T | undefined> {
+	try {
+		const response = await fetch(`${basePath}${path}`, { cache: "no-store" });
+		if (!response.ok) return undefined;
+		const data = (await response.json()) as { ok?: boolean } & Record<string, unknown>;
+		if (data.ok === false) return undefined;
+		return data as unknown as T;
+	} catch {
+		return undefined;
+	}
+}
+
+export async function refreshSubagents(): Promise<void> {
+	if (!connected.value) return;
+	const data = await fetchSubagentJson<{ runs: SubagentRunSummary[] }>("subagents");
+	const runs = data?.runs ?? [];
+	const previous = subagentRuns.value;
+	subagentRuns.value = runs;
+
+	// Keep the selection stable across refreshes: prefer the same key, then the
+	// first running run, then the first run.
+	const selected = selectedRunKey.value;
+	if (!selected || !runs.some((run) => run.key === selected)) {
+		const next = runs.find((run) => run.key === selected) ?? runs.find((run) => run.status === "running") ?? runs[0];
+		if (next && next.key !== selected) {
+			selectedRunKey.value = next.key;
+			void loadSelectedSubagentFile();
+		}
+	} else if (selected && previous.some((run) => run.key === selected && run.status !== "done")) {
+		// Selected run may still be active: refresh its file.
+		void loadSelectedSubagentFile();
+	}
+}
+
+async function loadSelectedSubagentFile(): Promise<void> {
+	const key = selectedRunKey.value;
+	const run = subagentRuns.value.find((candidate) => candidate.key === key);
+	if (!run) {
+		subagentFile.value = undefined;
+		return;
+	}
+	const view = subagentView.value;
+	const path = view === "output" ? run.outputPath : view === "outputs" ? run.outputs?.[0]?.path : run.transcriptPath;
+	if (!path) {
+		subagentFile.value = undefined;
+		return;
+	}
+	subagentLoading.value = true;
+	const data = await fetchSubagentJson<SubagentFileData>(`subagents/file?path=${encodeURIComponent(path)}`);
+	subagentFile.value = data;
+	subagentLoading.value = false;
+}
+
+export async function selectSubagentRun(key: string): Promise<void> {
+	if (selectedRunKey.value === key) return;
+	selectedRunKey.value = key;
+	subagentView.value = "transcript";
+	subagentFile.value = undefined;
+	await loadSelectedSubagentFile();
+}
+
+export async function setSubagentView(view: SubagentView): Promise<void> {
+	if (subagentView.value === view) return;
+	subagentView.value = view;
+	await loadSelectedSubagentFile();
+}
+
+export async function selectSubagentOutput(path: string): Promise<void> {
+	subagentLoading.value = true;
+	const data = await fetchSubagentJson<SubagentFileData>(`subagents/file?path=${encodeURIComponent(path)}`);
+	subagentFile.value = data;
+	subagentLoading.value = false;
+}
+
+let subagentPollTimer: ReturnType<typeof setInterval> | undefined;
+
+export function startSubagentPolling(): void {
+	if (subagentPollTimer) return;
+	subagentPolling.value = true;
+	void refreshSubagents();
+	subagentPollTimer = setInterval(() => {
+		// Lifecycle changes arrive instantly via extension_event pushes; poll only
+		// while a run is actively running so its transcript keeps tailing.
+		if (subagentRuns.value.some((run) => run.status === "running")) {
+			void refreshSubagents();
+		}
+	}, 2_000);
+}
+
+export function stopSubagentPolling(): void {
+	if (subagentPollTimer) {
+		clearInterval(subagentPollTimer);
+		subagentPollTimer = undefined;
+	}
+	subagentPolling.value = false;
+}
 
 function formatTokenCount(count: number): string {
 	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
