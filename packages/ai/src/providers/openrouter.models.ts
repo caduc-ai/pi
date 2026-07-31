@@ -60,6 +60,7 @@ type GeneratedModelGroups = {
 		"deepseek/deepseek-v3.2": object;
 		"deepseek/deepseek-v3.2-exp": object;
 		"deepseek/deepseek-v4-flash": object;
+		"deepseek/deepseek-v4-flash-0731": object;
 		"deepseek/deepseek-v4-pro": object;
 		"google/gemini-2.5-flash": object;
 		"google/gemini-2.5-flash-lite": object;
@@ -114,7 +115,6 @@ type GeneratedModelGroups = {
 		"minimax/minimax-m3": object;
 		"minimax/minimax-m3:batch": object;
 		"mistralai/codestral-2508": object;
-		"mistralai/devstral-2512": object;
 		"mistralai/ministral-14b-2512": object;
 		"mistralai/ministral-3b-2512": object;
 		"mistralai/ministral-8b-2512": object;
@@ -164,7 +164,6 @@ type GeneratedModelGroups = {
 		"openai/gpt-4o-mini": object;
 		"openai/gpt-4o-mini-2024-07-18": object;
 		"openai/gpt-5": object;
-		"openai/gpt-5-codex": object;
 		"openai/gpt-5-mini": object;
 		"openai/gpt-5-mini:batch": object;
 		"openai/gpt-5-nano": object;
@@ -209,12 +208,10 @@ type GeneratedModelGroups = {
 		"openai/gpt-oss-safeguard-20b": object;
 		"openai/o1": object;
 		"openai/o3": object;
-		"openai/o3-deep-research": object;
 		"openai/o3-mini": object;
 		"openai/o3-mini-high": object;
 		"openai/o3-pro": object;
 		"openai/o4-mini": object;
-		"openai/o4-mini-deep-research": object;
 		"openai/o4-mini-high": object;
 		"openrouter/auto": object;
 		"openrouter/auto-beta": object;

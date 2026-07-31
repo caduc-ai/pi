@@ -183,6 +183,40 @@ export interface BashResult {
 }
 
 // ============================================================================
+// Subagent inspection (served by pi-server under /i/<id>/subagents)
+// ============================================================================
+
+export type SubagentRunStatus = "running" | "done" | "failed";
+
+export interface SubagentRunSummary {
+	key: string;
+	source: "foreground" | "async";
+	runId: string;
+	agent: string;
+	status: SubagentRunStatus;
+	startedAt?: number;
+	endedAt?: number;
+	durationMs?: number;
+	model?: string;
+	task?: string;
+	exitCode?: number;
+	error?: string;
+	usage?: Record<string, unknown>;
+	toolCount?: number;
+	transcriptPath?: string;
+	transcriptBytes?: number;
+	outputPath?: string;
+	outputs?: Array<{ name: string; path: string; bytes: number }>;
+}
+
+export interface SubagentFileData {
+	path: string;
+	bytes: number;
+	truncated: boolean;
+	content: string;
+}
+
+// ============================================================================
 // RPC commands (client -> server)
 // ============================================================================
 
@@ -288,7 +322,8 @@ export type AgentSessionEvent =
 	| { type: "summarization_retry_finished" }
 	| { type: "session_info_changed"; name: string | undefined }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
-	| { type: "extension_error"; extensionPath: string; event: string; error: string };
+	| { type: "extension_error"; extensionPath: string; event: string; error: string }
+	| { type: "extension_event"; channel: string; data: unknown };
 
 // ============================================================================
 // Extension UI sub-protocol

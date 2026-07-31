@@ -2,7 +2,10 @@ import { EventEmitter } from "node:events";
 
 export interface EventBus {
 	emit(channel: string, data: unknown): void;
+	/** Subscribe to one channel. The handler receives the emitted data. */
 	on(channel: string, handler: (data: unknown) => void): () => void;
+	/** Subscribe to every channel. The handler receives (channel, data). */
+	on(channel: "*", handler: (channel: string, data: unknown) => void): () => void;
 }
 
 export interface EventBusController extends EventBus {
@@ -14,11 +17,16 @@ export function createEventBus(): EventBusController {
 	return {
 		emit: (channel, data) => {
 			emitter.emit(channel, data);
+			emitter.emit("*", channel, data);
 		},
 		on: (channel, handler) => {
-			const safeHandler = async (data: unknown) => {
+			const safeHandler = async (channelOrData: unknown, data?: unknown) => {
 				try {
-					await handler(data);
+					if (channel === "*") {
+						await (handler as (channel: string, data: unknown) => void)(channelOrData as string, data);
+					} else {
+						await (handler as (data: unknown) => void)(channelOrData);
+					}
 				} catch (err) {
 					console.error(`Event handler error (${channel}):`, err);
 				}

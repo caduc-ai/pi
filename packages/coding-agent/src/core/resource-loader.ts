@@ -45,6 +45,11 @@ export interface ResourceLoader {
 	getAppendSystemPrompt(): string[];
 	extendResources(paths: ResourceExtensionPaths): void;
 	reload(options?: ResourceLoaderReloadOptions): Promise<void>;
+	/**
+	 * Channel-based event bus shared with extensions (pi.events). Optional so
+	 * custom ResourceLoader implementations can omit it.
+	 */
+	getExtensionEventBus?(): EventBus;
 }
 
 function resolvePromptInput(input: string | undefined, description: string): string | undefined {
@@ -284,6 +289,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	getSystemPrompt(): string | undefined {
 		return this.systemPrompt;
+	}
+
+	getExtensionEventBus(): EventBus {
+		return this.eventBus;
 	}
 
 	getAppendSystemPrompt(): string[] {

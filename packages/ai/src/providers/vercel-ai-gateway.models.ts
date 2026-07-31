@@ -171,6 +171,7 @@ type GeneratedModelGroups = {
 		"stepfun/step-3.7-flash": object;
 		"tencent/hy3": object;
 		"thinkingmachines/inkling": object;
+		"thinkingmachines/inkling-small": object;
 		"xai/grok-4.1-fast-non-reasoning": object;
 		"xai/grok-4.1-fast-reasoning": object;
 		"xai/grok-4.20-multi-agent": object;

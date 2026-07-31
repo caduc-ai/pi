@@ -76,6 +76,15 @@ function error(id: string | undefined, command: string, message: string): RpcRes
 	return { id, type: "response", command, success: false, error: message };
 }
 
+/**
+ * Extension event bus channels forwarded to RPC clients as `extension_event`.
+ * Currently the pi-subagents namespace; extend as other extensions add
+ * channels that web clients should observe.
+ */
+function isForwardableExtensionChannel(channel: string): boolean {
+	return channel.startsWith("subagent:") || channel.startsWith("subagents:");
+}
+
 export class RpcBridge {
 	private readonly runtimeHost: AgentSessionRuntime;
 	private readonly callbacks: RpcBridgeCallbacks;
@@ -87,6 +96,8 @@ export class RpcBridge {
 	>();
 	private unsubscribe: (() => void) | undefined;
 	private unsubscribeBackpressure: (() => void) | undefined;
+	/** Extension event bus subscriptions (pi.events channels), unsubscribed on rebind. */
+	private unsubscribeExtensionEvents: (() => void) | undefined;
 	/**
 	 * Terminal output subscription. The terminal itself is process-scoped and
 	 * deliberately outside the session graph, so rebindSession() must not touch it.
@@ -461,6 +472,7 @@ export class RpcBridge {
 	private resubscribe(session: AgentSessionRuntime["session"]): void {
 		this.unsubscribe?.();
 		this.unsubscribeBackpressure?.();
+		this.unsubscribeExtensionEvents?.();
 		this.unsubscribe = session.subscribe((event) => {
 			this.broadcast(event);
 		});
@@ -471,6 +483,16 @@ export class RpcBridge {
 			}
 			await Promise.all(drains);
 		});
+		// Forward extension-emitted events to clients (e.g. pi-subagents run
+		// lifecycle: subagent:async-started, subagent:foreground-complete, ...).
+		const extensionEvents = session.extensionEvents;
+		if (extensionEvents) {
+			this.unsubscribeExtensionEvents = extensionEvents.on("*", (channel, data) => {
+				if (isForwardableExtensionChannel(channel)) {
+					this.broadcast({ type: "extension_event", channel, data });
+				}
+			});
+		}
 	}
 
 	/**
