@@ -10,20 +10,21 @@ Delegate tasks to specialized subagents with isolated context windows.
 - **Markdown rendering**: Final output rendered with proper formatting (expanded view)
 - **Usage tracking**: Shows turns, tokens, cost, and context usage per agent
 - **Abort support**: Ctrl+C propagates to kill subagent processes
+- **Workflow commands**: `/implement`, `/scout-and-plan`, and `/implement-and-review` are registered as slash commands, so they appear in the command list of every frontend (TUI, web, RPC) with no separate install step
 
 ## Structure
 
 ```
 subagent/
 ├── README.md            # This file
-├── index.ts             # The extension (entry point)
+├── index.ts             # The extension (entry point, registers the subagent tool and workflow commands)
 ├── agents.ts            # Agent discovery logic
 ├── agents/              # Sample agent definitions
 │   ├── scout.md         # Fast recon, returns compressed context
 │   ├── planner.md       # Creates implementation plans
 │   ├── reviewer.md      # Code review
 │   └── worker.md        # General-purpose (full capabilities)
-└── prompts/             # Workflow presets (prompt templates)
+└── prompts/             # Workflow presets (prompt templates mirroring the registered commands)
     ├── implement.md     # scout -> planner -> worker
     ├── scout-and-plan.md    # scout -> planner (no implementation)
     └── implement-and-review.md  # worker -> reviewer -> worker
@@ -44,8 +45,12 @@ mkdir -p ~/.pi/agent/agents
 for f in packages/coding-agent/examples/extensions/subagent/agents/*.md; do
   ln -sf "$(pwd)/$f" ~/.pi/agent/agents/$(basename "$f")
 done
+```
 
-# Symlink workflow prompts
+The workflow commands (`/implement`, `/scout-and-plan`, `/implement-and-review`) are registered by the extension itself, so no prompt symlink step is required. The `prompts/` files are kept as reference and for setups that prefer file-based prompt templates; if you want them as templates too, symlink them into `~/.pi/agent/prompts`:
+
+```bash
+# Optional: symlink workflow prompts as file-based prompt templates
 mkdir -p ~/.pi/agent/prompts
 for f in packages/coding-agent/examples/extensions/subagent/prompts/*.md; do
   ln -sf "$(pwd)/$f" ~/.pi/agent/prompts/$(basename "$f")
@@ -152,13 +157,15 @@ Project agents override user agents with the same name when `agentScope: "both"`
 | `reviewer` | Code review | Sonnet | read, grep, find, ls, bash |
 | `worker` | General-purpose | Sonnet | (all default) |
 
-## Workflow Prompts
+## Workflow Commands
 
-| Prompt | Flow |
-|--------|------|
+| Command | Flow |
+|---------|------|
 | `/implement <query>` | scout → planner → worker |
 | `/scout-and-plan <query>` | scout → planner |
 | `/implement-and-review <query>` | worker → reviewer → worker |
+
+The commands are registered by the extension, so they show up in the slash-command list (TUI autocomplete and web views) as soon as the extension loads. They expand to the same instructions as the `prompts/*.md` files in this directory.
 
 ## Error Handling
 

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added workflow slash commands to the subagent example extension: `/implement`, `/scout-and-plan`, and `/implement-and-review`. They are registered by the extension itself, so they surface in the slash-command list of every frontend (TUI, web, RPC) as soon as the extension loads, without a separate prompt-template install step.
 - Added web mode: `pi --web [--web-port <port>] [--web-host <host>]` serves the pi web UI (new `@earendil-works/pi-web` package) over HTTP/WebSocket with a per-run auth token, giving full session control (prompts, steering, abort, extension dialogs) from a browser. Web mode speaks the exact RPC protocol over WebSocket; the protocol gained `extension_ui_cancel` (broadcast when a dialog is answered by another client, times out, or is aborted). See [rpc.md](docs/rpc.md).
 - Added `/web [off|<host>]` command to share a live interactive session to the pi web UI mid-flight, displaying a URL and QR code. Extension dialogs are multiplexed between the TUI and all connected web clients (first response wins); notifications, statuses, widgets, and titles are forwarded to web clients.
 - Added read-only session viewer: `pi --web --view <session.jsonl>` serves a recorded session file to the web UI without an agent process (no model or auth required).

@@ -458,6 +458,62 @@ const SubagentParams = Type.Object({
 });
 
 export default function (pi: ExtensionAPI) {
+	// Workflow commands. Registered as slash commands so they surface in every
+	// frontend (TUI, web, RPC) via the command list, without a separate prompt
+	// template install step. Keep the markdown in prompts/ in sync.
+	const workflowCommands: Array<{
+		name: string;
+		description: string;
+		build: (args: string) => string;
+	}> = [
+		{
+			name: "implement",
+			description: "Full implementation workflow - scout gathers context, planner creates plan, worker implements",
+			build: (args) => `Use the subagent tool with the chain parameter to execute this workflow:
+
+1. First, use the "scout" agent to find all code relevant to: ${args}
+2. Then, use the "planner" agent to create an implementation plan for "${args}" using the context from the previous step (use {previous} placeholder)
+3. Finally, use the "worker" agent to implement the plan from the previous step (use {previous} placeholder)
+
+Execute this as a chain, passing output between steps via {previous}.`,
+		},
+		{
+			name: "scout-and-plan",
+			description: "Scout gathers context, planner creates implementation plan (no implementation)",
+			build: (args) => `Use the subagent tool with the chain parameter to execute this workflow:
+
+1. First, use the "scout" agent to find all code relevant to: ${args}
+2. Then, use the "planner" agent to create an implementation plan for "${args}" using the context from the previous step (use {previous} placeholder)
+
+Execute this as a chain, passing output between steps via {previous}. Do NOT implement - just return the plan.`,
+		},
+		{
+			name: "implement-and-review",
+			description: "Worker implements, reviewer reviews, worker applies feedback",
+			build: (args) => `Use the subagent tool with the chain parameter to execute this workflow:
+
+1. First, use the "worker" agent to implement: ${args}
+2. Then, use the "reviewer" agent to review the implementation from the previous step (use {previous} placeholder)
+3. Finally, use the "worker" agent to apply the feedback from the review (use {previous} placeholder)
+
+Execute this as a chain, passing output between steps via {previous}.`,
+		},
+	];
+
+	for (const workflow of workflowCommands) {
+		pi.registerCommand(workflow.name, {
+			description: workflow.description,
+			handler: async (args, ctx) => {
+				const query = args.trim();
+				if (!query) {
+					ctx.ui.notify(`Usage: /${workflow.name} <query>`, "warning");
+					return;
+				}
+				pi.sendUserMessage(workflow.build(query), ctx.isIdle() ? undefined : { deliverAs: "steer" });
+			},
+		});
+	}
+
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
