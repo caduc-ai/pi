@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- Fixed the server web dashboard's past-sessions list being scoped to the working-directory field, which hid sessions from other projects; it now lists every session across all project directories, newest first, and scopes to a single directory only when one is typed.
 - Fixed the server review page to start from the current branch's GitHub PR by default, creating the PR when one does not already exist.
 - Removed the standalone terminal link from the server home page.
 - Fixed extension UI requests only reaching the last attached rpc_stream client: requests now fan out to all stream clients, dialog responses are first-response-wins, and other clients receive `extension_ui_cancel`.

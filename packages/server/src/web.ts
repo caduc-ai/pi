@@ -467,7 +467,7 @@ ${items}
 		var label = document.getElementById("past-cwd");
 		var list = document.getElementById("past-list");
 		async function refresh() {
-			var cwd = cwdInput.value.trim() || ".";
+			var cwd = cwdInput.value.trim();
 			try {
 				var res = await fetch("/api/sessions?cwd=" + encodeURIComponent(cwd));
 				var data = await res.json();
@@ -1360,12 +1360,15 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			return;
 		}
 
-		// GET /api/sessions?cwd=<path> — list past sessions
+		// GET /api/sessions?cwd=<path> — list past sessions. Without a cwd, lists every
+		// session across all project directories (newest first); with one, only the
+		// sessions of that working directory.
 		if (request.method === "GET" && url.pathname === "/api/sessions") {
 			response.writeHead(200, { "content-type": "application/json" });
-			const cwd = url.searchParams.get("cwd") || process.cwd();
-			SessionManager.list(cwd)
-				.then((sessions: Awaited<ReturnType<typeof SessionManager.list>>) => {
+			const cwd = url.searchParams.get("cwd")?.trim();
+			const sessionsPromise = cwd ? SessionManager.list(cwd) : SessionManager.listAll();
+			sessionsPromise
+				.then((sessions: Awaited<typeof sessionsPromise>) => {
 					response.end(
 						JSON.stringify({
 							ok: true,
