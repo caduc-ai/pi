@@ -6,12 +6,10 @@ import { flattenModelCatalog, type ModelCatalog } from "../model-catalog.ts";
 
 type GeneratedModelGroups = {
 	"openai-completions": {
-		"glm-4.5-air": object;
 		"glm-4.7": object;
 		"glm-5-turbo": object;
-		"glm-5.1": object;
 		"glm-5.2": object;
-		"glm-5v-turbo": object;
+		"glm-5.2-highspeed[1m]": object;
 	};
 };
 

@@ -63,6 +63,7 @@ type GeneratedModelGroups = {
 		"deepseek/deepseek-v3.2": object;
 		"deepseek/deepseek-v3.2-thinking": object;
 		"deepseek/deepseek-v4-flash": object;
+		"deepseek/deepseek-v4-flash-0731": object;
 		"deepseek/deepseek-v4-pro": object;
 		"google/gemini-2.5-flash": object;
 		"google/gemini-2.5-flash-lite": object;
