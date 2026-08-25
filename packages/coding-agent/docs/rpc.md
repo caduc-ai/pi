@@ -623,9 +623,11 @@ running as a separate process inside its own tmux session (same transport as
 `terminal_*` above: base64 payloads, `termId`/`replay` on open).
 
 Unlike `terminal_*`, only one process may write to a session at a time. While a
-TUI is open, `prompt`, `steer`, and `follow_up` fail with `"TUI is attached to
-this session"`. Read-only commands, `bash`, `terminal_*`, and subagent
-inspection are unaffected.
+TUI is open, every session-mutating command fails with `"TUI is attached to
+this session"`: `prompt`, `steer`, `follow_up`, `new_session`, `switch_session`,
+`fork`, `clone`, `change_cwd`, `compact`, and `set_session_name`. Read-only
+commands, bridge-local settings (`set_model`, `set_thinking_level`, ...),
+`bash`, `terminal_*`, and subagent inspection are unaffected.
 
 `tui_open` fails if the session is currently streaming or compacting, or if it
 has no session file (ephemeral `--no-session` runs cannot be attached to).
@@ -686,6 +688,9 @@ Response:
 #### tui_close
 
 Kill the TUI process and its tmux session, then reload the session from disk.
+Every other attached client (e.g. a second tab on the same session) receives a
+`tui_exit` event with `reason: "closed"`; the requesting client learns from this
+response instead and does not receive its own `tui_exit`.
 
 ```json
 {"type": "tui_close"}

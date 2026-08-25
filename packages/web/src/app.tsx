@@ -12,6 +12,7 @@ import {
 	connected,
 	instanceId,
 	sessionState,
+	sessionUnreachable,
 	subagentRuns,
 	terminalOpen,
 	toggleSubagentsPanel,
@@ -128,7 +129,24 @@ function CommandResultCard() {
 	);
 }
 
+function UnreachableView() {
+	return (
+		<div class="unreachable-view">
+			<div class="unreachable-card">
+				<h1>Session not found</h1>
+				<p>This session is no longer running on the server.</p>
+				<a href="/" class="unreachable-home">
+					Go home
+				</a>
+			</div>
+		</div>
+	);
+}
+
 export function App() {
+	if (sessionUnreachable.value) {
+		return <UnreachableView />;
+	}
 	return (
 		<div class="app">
 			<Header />

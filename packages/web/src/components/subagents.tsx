@@ -12,6 +12,7 @@ import {
 	subagentLoading,
 	subagentRuns,
 	subagentView,
+	tuiActive,
 } from "../state.ts";
 import { MarkdownView } from "./markdown-view.tsx";
 
@@ -200,6 +201,11 @@ export function SubagentsPanel() {
 	if (runs.length === 0) {
 		return (
 			<div class="subagents-panel">
+				{tuiActive.value ? (
+					<div class="subagents-tui-note">
+						TUI is still attached in the background; chat is blocked until it closes.
+					</div>
+				) : null}
 				<div class="subagents-empty">
 					No subagent runs found in this project. Ask pi to delegate work (e.g. “Use scout to investigate this
 					code”) and runs will appear here with their transcripts.
@@ -213,6 +219,11 @@ export function SubagentsPanel() {
 
 	return (
 		<div class="subagents-panel">
+			{tuiActive.value ? (
+				<div class="subagents-tui-note">
+					TUI is still attached in the background; chat is blocked until it closes.
+				</div>
+			) : null}
 			<div class="subagents-tabs">
 				{runs.map((run) => (
 					<button

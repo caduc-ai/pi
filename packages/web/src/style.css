@@ -122,6 +122,48 @@ body {
 	50% { opacity: 0.3; }
 }
 
+/* ============ Unreachable session (definitively-gone instance, ws close 4404) ============ */
+
+.unreachable-view {
+	align-items: center;
+	display: flex;
+	height: 100dvh;
+	justify-content: center;
+	padding: 24px;
+}
+
+.unreachable-card {
+	max-width: 360px;
+	text-align: center;
+}
+
+.unreachable-card h1 {
+	color: var(--pi-text);
+	font-size: 18px;
+	margin: 0 0 8px;
+}
+
+.unreachable-card p {
+	color: var(--pi-muted);
+	font-size: 14px;
+	margin: 0 0 20px;
+}
+
+.unreachable-home {
+	background: var(--pi-selectedBg);
+	border: 1px solid var(--pi-borderMuted);
+	border-radius: 4px;
+	color: var(--pi-text);
+	display: inline-block;
+	padding: 8px 16px;
+	text-decoration: none;
+}
+
+.unreachable-home:hover {
+	border-color: var(--pi-accent);
+	color: var(--pi-accent);
+}
+
 /* ============ Chat ============ */
 
 .chat {
@@ -1038,10 +1080,29 @@ select.theme-toggle {
 	color: var(--pi-text);
 }
 
+.terminal-host-wrap {
+	display: flex;
+	flex: 1 1 auto;
+	min-height: 0;
+	position: relative;
+}
+
 .terminal-host {
 	flex: 1 1 auto;
 	min-height: 0;
 	padding: 4px 6px;
+}
+
+.terminal-status-overlay {
+	align-items: center;
+	background: color-mix(in srgb, var(--pi-cardBg) 85%, transparent);
+	color: var(--pi-muted);
+	display: flex;
+	font-size: 13px;
+	inset: 0;
+	justify-content: center;
+	pointer-events: none;
+	position: absolute;
 }
 
 /* ============================================================================
@@ -1138,6 +1199,15 @@ select.theme-toggle {
 	color: var(--pi-muted);
 	font-size: 13px;
 	padding: 24px;
+}
+
+.subagents-tui-note {
+	background: var(--pi-toolPendingBg);
+	border-bottom: 1px solid var(--pi-borderMuted);
+	color: var(--pi-muted);
+	flex: 0 0 auto;
+	font-size: 12px;
+	padding: 6px 12px;
 }
 
 .subagents-tabs {

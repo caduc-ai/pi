@@ -255,6 +255,14 @@ export class ServerSupervisor {
 			for (const subscriber of live.subscribers) {
 				subscriber(event);
 			}
+			// session_reloaded is a bridge-level push (rpc-bridge.ts), not part of the
+			// AgentSessionEvent union handleRpc's shouldRefreshSessionMetadata gates on,
+			// fired while a TUI is attached and writes to the session file (e.g. /cd or
+			// /new from inside the TUI). Refresh the instance record here too, or the
+			// dashboard/review link stays stale until the TUI is closed.
+			if ((event as { type?: string }).type === "session_reloaded") {
+				void this.syncInstanceRecord(live);
+			}
 		});
 		live.unsubscribeExit = channel.onExit((error) => {
 			void this.handleUnexpectedRpcExit(live, error);

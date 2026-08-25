@@ -109,7 +109,14 @@ export class RpcProcessInstance {
 	}
 
 	private handleLine(line: string): void {
-		const parsed = JSON.parse(line) as { type?: string; id?: string };
+		let parsed: { type?: string; id?: string };
+		try {
+			parsed = JSON.parse(line) as { type?: string; id?: string };
+		} catch {
+			// A malformed line on the child's stdout must not take the whole server
+			// down; drop it and keep serving this and every other instance.
+			return;
+		}
 		switch (parsed.type) {
 			case "response": {
 				if (!parsed.id) {

@@ -174,6 +174,66 @@ describe("tui_* over RPC", () => {
 			expect(client.responseFor("tui_input")?.success).toBe(false);
 		});
 
+		it("blocks every session-mutating command while the TUI is open, not just prompt/steer/follow_up", async () => {
+			const { client, receive } = await setup();
+			await receive({ id: "1", type: "tui_open", cols: 80, rows: 24 });
+
+			const blocked: Array<Record<string, unknown>> = [
+				{ id: "2", type: "new_session" },
+				{ id: "3", type: "switch_session", sessionPath: "/tmp/does-not-matter.jsonl" },
+				{ id: "4", type: "fork", entryId: "some-entry" },
+				{ id: "5", type: "clone" },
+				{ id: "6", type: "change_cwd", cwd: "/tmp" },
+				{ id: "7", type: "compact" },
+				{ id: "8", type: "set_session_name", name: "renamed" },
+			];
+			for (const command of blocked) {
+				await receive(command);
+				const response = client.responseFor(command.type as string);
+				expect(response?.success, `${command.type} should be blocked while a TUI is attached`).toBe(false);
+				expect(response?.error).toBe("TUI is attached to this session");
+			}
+
+			// Reads and bridge-local settings are unaffected, matching the existing
+			// "does not block read-only or terminal commands" test above.
+			await receive({ id: "9", type: "set_thinking_level", level: "low" });
+			expect(client.responseFor("set_thinking_level")?.success).toBe(true);
+		});
+
+		it("dedupes concurrent tui_open calls instead of spawning a second TUI process", async () => {
+			const { client, receive } = await setup();
+
+			// Fire two tui_open commands without awaiting the first, mirroring the real
+			// (unawaited) ws message handler: both see the in-flight creation and reattach
+			// to it instead of racing TmuxTerminal.create() twice.
+			const first = receive({ id: "1", type: "tui_open", cols: 80, rows: 24 });
+			const second = receive({ id: "2", type: "tui_open", cols: 80, rows: 24 });
+			await Promise.all([first, second]);
+
+			const firstResponse = client.messages.find((m) => m.id === "1") as { data?: { termId: string } } | undefined;
+			const secondResponse = client.messages.find((m) => m.id === "2") as { data?: { termId: string } } | undefined;
+			expect(firstResponse?.data?.termId).toBeDefined();
+			expect(secondResponse?.data?.termId).toBe(firstResponse?.data?.termId);
+		});
+
+		it("broadcasts tui_exit to other attached clients on tui_close, but not to the closer", async () => {
+			const { bridge, client, receive } = await setup();
+			const other = createTestClient();
+			bridge.attachClient(other.connection);
+
+			await receive({ id: "1", type: "tui_open", cols: 80, rows: 24 });
+			await receive({ id: "2", type: "tui_close" });
+
+			expect(client.responseFor("tui_close")?.success).toBe(true);
+			// The closer already handles this locally (see toggleTui in the web client);
+			// a broadcast back to it would be a duplicate toast/resync.
+			expect(client.messages.some((m) => m.type === "tui_exit")).toBe(false);
+			// Every other client attached to the same session must learn the TUI is gone.
+			const exitMessage = other.messages.find((m) => m.type === "tui_exit") as { reason?: string } | undefined;
+			expect(exitMessage).toBeDefined();
+			expect(exitMessage?.reason).toBe("closed");
+		});
+
 		it("reloads the session and notifies clients while the TUI is still open, when the session file changes", async () => {
 			const { client, receive, switchSessionCalls, sessionFile } = await setup();
 			await receive({ id: "1", type: "tui_open", cols: 80, rows: 24 });

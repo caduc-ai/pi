@@ -20,3 +20,11 @@
 - Fixed the theme picker not switching theme: the dev server proxy did not forward `/themes` (only `/theme`), so the theme list silently fell back to defaults.
 - Fixed the subagents panel's run tabs missing a `key`, and view/output switches showing briefly stale content from the previous view while the new one loaded.
 - Fixed subagent transcript/output/file fetch failures being silently swallowed, which looked like clicking a tab did nothing; failures now show a toast.
+- Fixed `/i/<id>/` for an unknown or stopped instance (served by `pi-server`) rendering a blank/plain-text page with no way back: the app now shows a full-page "Session not found" state with a home link once the WebSocket closes with the server's "unknown instance" code (4404), instead of retrying the connection forever. See the matching `@earendil-works/pi-server` change to serve the app shell for these paths.
+- Fixed the `tui`/terminal views failing to open silently: a failed `tui_open`/`terminal_open` now shows a toast and reverts to the chat view instead of leaving a near-empty pane behind.
+- Fixed stale terminal output replaying into a freshly reopened `tui`/terminal view (a signal fires its last value immediately on subscribe): the output signal is now reset on exit and on unmount.
+- Fixed the `tui`/terminal views going silent after a WebSocket reconnect: they now re-open with a fresh replay and show a "Reconnecting…" overlay while doing so, instead of only resuming future output.
+- Fixed the `tui`/terminal views keeping the theme they were opened with; they now update live when the theme is switched from the footer.
+- Fixed keystrokes typed immediately after opening the `tui`/terminal view being lost before the previously-focused editor unmounted; the view now focuses itself as soon as it opens, and shows a loading overlay until the first frame arrives.
+- Fixed terminal/TUI keystrokes typed while disconnected throwing an unhandled promise rejection; input sent while disconnected now fails through the same toast convention as the rest of the app.
+- Fixed the terminal/TUI resize RPC firing on every layout tick during a drag-resize; it is now debounced (~150ms).

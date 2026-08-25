@@ -131,6 +131,15 @@ export class RpcBridge {
 	 * write commands, and the TUI's own exit/close paths trigger the reload.
 	 */
 	private tuiTerminal: TmuxTerminal | undefined;
+	/**
+	 * Set synchronously for the duration of TmuxTerminal.create() in tui_open, before
+	 * `this.tuiTerminal` is assigned. Two purposes: dedupes concurrent tui_open calls
+	 * (mirrors terminal-manager.ts's getOrCreateTerminal), and closes the TOCTOU window
+	 * where a write command could slip in between the streaming/compacting check and the
+	 * terminal actually being attached (isBlockedByTui treats this the same as a live
+	 * tuiTerminal).
+	 */
+	private tuiCreating: Promise<TmuxTerminal> | undefined;
 	private unsubscribeTui: (() => void) | undefined;
 	/**
 	 * Watches the session file while the TUI is attached, so the bridge's
@@ -308,9 +317,29 @@ export class RpcBridge {
 		}
 	}
 
-	/** True while a TUI is attached and `type` would race writes with it. */
+	/**
+	 * Command types that mutate the session (its content, its file, or which file
+	 * this bridge points at) and therefore race with a TUI process writing to the
+	 * same session file. Reads (get_state, get_messages, ...) and bridge-local
+	 * settings (set_model, set_thinking_level, ...) are left open.
+	 */
+	private static readonly TUI_BLOCKED_COMMANDS: ReadonlySet<RpcCommand["type"]> = new Set<RpcCommand["type"]>([
+		"prompt",
+		"steer",
+		"follow_up",
+		"new_session",
+		"switch_session",
+		"fork",
+		"clone",
+		"change_cwd",
+		"compact",
+		"set_session_name",
+	]);
+
+	/** True while a TUI is attached (or being created) and `type` would race writes with it. */
 	private isBlockedByTui(type: RpcCommand["type"]): boolean {
-		return Boolean(this.tuiTerminal?.isAlive) && (type === "prompt" || type === "steer" || type === "follow_up");
+		const tuiAttached = Boolean(this.tuiTerminal?.isAlive) || this.tuiCreating !== undefined;
+		return tuiAttached && RpcBridge.TUI_BLOCKED_COMMANDS.has(type);
 	}
 
 	attachClient(connection: RpcClientConnection): RpcClientHandle {
@@ -937,10 +966,6 @@ export class RpcBridge {
 
 			case "tui_open": {
 				try {
-					if (session.isStreaming || session.isCompacting) {
-						return error(id, "tui_open", "Cannot open the TUI while the session is streaming or compacting");
-					}
-
 					if (this.tuiTerminal?.isAlive) {
 						// Reattach: resize to this client's viewport and replay scrollback.
 						if (command.cols !== undefined && command.rows !== undefined) {
@@ -957,6 +982,28 @@ export class RpcBridge {
 						});
 					}
 
+					// A creation is already in flight (concurrent tui_open calls, e.g. two tabs
+					// racing to attach): await the same terminal instead of spawning a second one.
+					if (this.tuiCreating) {
+						const terminal = await this.tuiCreating;
+						if (command.cols !== undefined && command.rows !== undefined) {
+							await terminal.resize(command.cols, command.rows);
+						}
+						this.attachTuiStream(terminal);
+						const replay = await terminal.captureReplay();
+						const { cols, rows } = terminal.size;
+						return success(id, "tui_open", {
+							termId: terminal.id,
+							cols,
+							rows,
+							replay: Buffer.from(replay, "utf8").toString("base64"),
+						});
+					}
+
+					if (session.isStreaming || session.isCompacting) {
+						return error(id, "tui_open", "Cannot open the TUI while the session is streaming or compacting");
+					}
+
 					const sessionFile = session.sessionFile;
 					if (!sessionFile) {
 						return error(id, "tui_open", "TUI requires a persisted session (this session has no session file)");
@@ -964,16 +1011,29 @@ export class RpcBridge {
 					const cwd = session.sessionManager.getCwd();
 					const resolveTuiCommand = this.options.resolveTuiCommand ?? defaultResolveTuiCommand;
 
-					const terminal = await TmuxTerminal.create({
+					// Set before the await so a second tui_open (or a write command gated by
+					// isBlockedByTui) landing before this resolves sees the in-flight creation
+					// rather than racing it. No await happens between here and the assignment
+					// below, so this is race-free despite the lack of a lock.
+					const creating = TmuxTerminal.create({
 						cwd,
 						cols: command.cols,
 						rows: command.rows,
 						env: { ...process.env, TERM: process.env.TERM || "xterm-256color" },
 						command: resolveTuiCommand({ sessionFile, cwd }),
+					}).then((terminal) => {
+						this.tuiTerminal = terminal;
+						this.attachTuiStream(terminal);
+						this.startWatchingSessionFile(sessionFile);
+						return terminal;
 					});
-					this.tuiTerminal = terminal;
-					this.attachTuiStream(terminal);
-					this.startWatchingSessionFile(sessionFile);
+					this.tuiCreating = creating;
+					let terminal: TmuxTerminal;
+					try {
+						terminal = await creating;
+					} finally {
+						if (this.tuiCreating === creating) this.tuiCreating = undefined;
+					}
 					const replay = await terminal.captureReplay();
 					const { cols, rows } = terminal.size;
 					return success(id, "tui_open", {
@@ -1013,6 +1073,12 @@ export class RpcBridge {
 					await terminal.dispose();
 				}
 				await this.reloadSessionFromDisk();
+				// Tell every other attached client (e.g. a second tab) that the TUI is gone
+				// and the session was reloaded, mirroring the exit path in attachTuiStream.
+				// The requesting client already knows from this response and handles it
+				// locally (see toggleTui in the web client), so it is excluded to avoid a
+				// duplicate toast/resync there.
+				this.broadcast({ type: "tui_exit", reason: "closed" }, client);
 				return success(id, "tui_close");
 			}
 

@@ -22,6 +22,11 @@
 
 - Fixed RPC clients not seeing changes the TUI made (e.g. switching models from its own selector) until the TUI was closed: the bridge now watches the session file while a TUI is attached and reloads it (debounced ~300ms), broadcasting a new `session_reloaded` event. See [rpc.md](docs/rpc.md#tui).
 - Fixed the `/theme/<name>.json` endpoint in `pi --web`'s standalone web server (used by `pi --web --view`) always returning 404: it compared the theme name including the `.json` suffix from the request path against names that never have one.
+- Fixed the TUI-attached write guard only blocking `prompt`/`steer`/`follow_up`: `new_session`, `switch_session`, `fork`, `clone`, `change_cwd`, `compact`, and `set_session_name` are now also rejected with `"TUI is attached to this session"` while a TUI is attached, closing a window where a second client could rebind the bridge to a different session file out from under the still-writing TUI process. See [rpc.md](docs/rpc.md#tui).
+- Fixed `tui_open` racing two concurrent calls (e.g. two tabs opening the TUI at once) into spawning two TUI processes attached to the same session file, leaking the loser: concurrent calls now dedupe onto the same in-flight creation.
+- Fixed `tui_close` only notifying the closing client: every other client attached to the same session now also receives `tui_exit` (`reason: "closed"`), so they stop rendering a TUI that is no longer attached server-side. See [rpc.md](docs/rpc.md#tui_close).
+- Fixed the web/RPC terminal and TUI failing to find `tmux` when it is only installed via a non-default prefix (nix, linuxbrew, asdf, ...): tmux discovery now falls back to a `PATH` search after the hardcoded candidate paths.
+- Fixed leaked `pi-<pid>-*` tmux sessions from a crashed (SIGKILLed) prior `pi` process never being cleaned up: interactive, web, and RPC mode startup now reaps stale sessions left by processes that are no longer running.
 
 ## [0.82.1] - 2026-07-25
 

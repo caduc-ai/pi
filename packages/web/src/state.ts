@@ -1,5 +1,5 @@
 import { signal } from "@preact/signals";
-import { RpcClient } from "./client.ts";
+import { INSTANCE_UNREACHABLE_CLOSE_CODE, RpcClient } from "./client.ts";
 import type {
 	AgentMessage,
 	AgentSessionEvent,
@@ -38,6 +38,12 @@ export interface Widget {
 }
 
 export const connected = signal(false);
+/**
+ * Set once the WS closes with the "unknown instance" code (4404): the instance is
+ * definitively gone (never existed, or was stopped), not a transient drop, so the
+ * app renders a full-page "session not found" state instead of retrying forever.
+ */
+export const sessionUnreachable = signal(false);
 export const sessionState = signal<RpcSessionState | undefined>(undefined);
 export const messages = signal<AgentMessage[]>([]);
 export const toolStates = signal<Record<string, ToolDisplayState>>({});
@@ -86,10 +92,13 @@ export const client = new RpcClient(`${wsProtocol}://${location.host}${basePath}
 let syncing = false;
 const eventBuffer: AgentSessionEvent[] = [];
 
-function handleConnectionChange(isConnected: boolean): void {
+function handleConnectionChange(isConnected: boolean, closeCode?: number): void {
 	connected.value = isConnected;
 	if (isConnected) {
+		sessionUnreachable.value = false;
 		void sync();
+	} else if (closeCode === INSTANCE_UNREACHABLE_CLOSE_CODE) {
+		sessionUnreachable.value = true;
 	}
 }
 
@@ -382,6 +391,10 @@ function applyEvent(event: AgentSessionEvent): void {
 			break;
 
 		case "terminal_exit":
+			// Reset so a later reopen's fresh XTerm doesn't get this session's last
+			// chunk replayed into it the instant it subscribes (signals fire their
+			// current value synchronously on subscribe).
+			terminalOutput.value = undefined;
 			pushToast(event.reason ? `Terminal exited (${event.reason})` : "Terminal exited", "info");
 			break;
 
@@ -391,6 +404,8 @@ function applyEvent(event: AgentSessionEvent): void {
 
 		case "tui_exit":
 			tuiActive.value = false;
+			// Same reasoning as terminal_exit above.
+			tuiOutput.value = undefined;
 			pushToast(event.reason ? `TUI exited (${event.reason})` : "TUI exited", "info");
 			void sync();
 			break;

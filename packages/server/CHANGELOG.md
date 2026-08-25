@@ -29,6 +29,9 @@
 - Fixed spawning RPC child processes under Node (the `./rpc-entry` package subpath only declares an `import` condition; resolution now uses `import.meta.resolve`).
 - Fixed the `/theme/<name>.json` endpoint (used by the web UI's theme picker) always returning 404: it appended `.json` to a theme name that already carried it from the request path.
 - Fixed the supervised instance record (cwd, session id/file) going stale after closing the TUI view from the web UI, since `tui_close` can change any of those (the TUI can `/cd` or `/new` while attached) but was not in the set of commands that refresh it.
+- Fixed `/i/<id>/` for an unknown or stopped instance returning a bare-text "Unknown instance" page instead of the web app: it now serves the same SPA shell as a live instance, so the client can render a proper "session not found" state (the WebSocket upgrade still closes with code 4404 for these ids, which the client uses to distinguish this from a transient drop).
+- Fixed a malformed line on a supervised instance's RPC child stdout crashing the entire server (an uncaught `JSON.parse` took down every instance, not just the offending one); malformed lines are now dropped, matching the externally-registered-instance socket path.
+- Fixed the supervised instance record not refreshing on a live `session_reloaded` push (the TUI writing to the session file while still attached, e.g. `/cd` or `/new` from inside it): only command responses refreshed it before, so the record stayed stale until the TUI closed.
 
 ## [0.82.1] - 2026-07-25
 

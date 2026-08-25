@@ -1668,14 +1668,14 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			return;
 		}
 
-		// Instance SPA paths fall through to index.html. Static assets are also served under
-		// each instance prefix so relative PWA manifest/service-worker URLs keep the
-		// installed app scoped to that instance.
+		// Instance SPA paths (valid or not) fall through to index.html: an unknown or
+		// stopped instance id still needs the app shell loaded so the client-side JS can
+		// render a proper "session not found" state instead of a bare-text 404 page. The
+		// WS upgrade handler below is what actually gates on instance liveness (closes
+		// with code 4404), which the client uses to distinguish this from a transient drop.
+		// Static assets are also served under each instance prefix so relative PWA
+		// manifest/service-worker URLs keep the installed app scoped to that instance.
 		const instanceMatch = INSTANCE_PATH_PATTERN.exec(url.pathname);
-		if (instanceMatch && !supervisor.getLiveInstance(instanceMatch[1])) {
-			sendText(response, 404, "Unknown instance\n");
-			return;
-		}
 		const instancePrefix = instanceMatch ? `/i/${instanceMatch[1]}/` : undefined;
 		const relativePath = decodeURIComponent(
 			instancePrefix && url.pathname.startsWith(instancePrefix)
