@@ -217,6 +217,7 @@ export function SubagentsPanel() {
 				{runs.map((run) => (
 					<button
 						type="button"
+						key={run.key}
 						class={`subagents-tab ${run.key === selectedKey ? "active" : ""}`}
 						title={`${run.agent} · ${run.runId} · ${STATUS_LABEL[run.status]}`}
 						onClick={() => void selectSubagentRun(run.key)}

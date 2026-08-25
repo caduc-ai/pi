@@ -395,6 +395,13 @@ function applyEvent(event: AgentSessionEvent): void {
 			void sync();
 			break;
 
+		case "session_reloaded":
+			// The TUI wrote to the session file while still attached (e.g. it
+			// switched models from its own selector); re-sync so the footer and
+			// session state stay live instead of only refreshing on tui_close.
+			void sync();
+			break;
+
 		default:
 			break;
 	}
@@ -551,15 +558,29 @@ export function toggleSubagentsPanel(): void {
 	activePanel.value = activePanel.value === "subagents" ? "chat" : "subagents";
 }
 
-/** REST endpoints live under the same base path as the app (e.g. /i/<id>/subagents). */
+/**
+ * REST endpoints live under the same base path as the app (e.g. /i/<id>/subagents).
+ * Failures are reported via toast instead of swallowed: a silent failure here reads
+ * to the user as "clicking did nothing" (e.g. a transcript/output tab stays empty).
+ */
 async function fetchSubagentJson<T>(path: string): Promise<T | undefined> {
 	try {
 		const response = await fetch(`${basePath}${path}`, { cache: "no-store" });
-		if (!response.ok) return undefined;
-		const data = (await response.json()) as { ok?: boolean } & Record<string, unknown>;
-		if (data.ok === false) return undefined;
+		if (!response.ok) {
+			pushToast(`Failed to load subagent data: HTTP ${response.status}`, "error");
+			return undefined;
+		}
+		const data = (await response.json()) as { ok?: boolean; error?: string } & Record<string, unknown>;
+		if (data.ok === false) {
+			pushToast(
+				data.error ? `Failed to load subagent data: ${data.error}` : "Failed to load subagent data",
+				"error",
+			);
+			return undefined;
+		}
 		return data as unknown as T;
-	} catch {
+	} catch (error) {
+		pushToast(`Failed to load subagent data: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return undefined;
 	}
 }
@@ -616,10 +637,14 @@ export async function selectSubagentRun(key: string): Promise<void> {
 export async function setSubagentView(view: SubagentView): Promise<void> {
 	if (subagentView.value === view) return;
 	subagentView.value = view;
+	// Clear the previous view's content so a slow fetch doesn't briefly show stale
+	// (wrong-view) content, matching selectSubagentRun's behavior.
+	subagentFile.value = undefined;
 	await loadSelectedSubagentFile();
 }
 
 export async function selectSubagentOutput(path: string): Promise<void> {
+	subagentFile.value = undefined;
 	subagentLoading.value = true;
 	const data = await fetchSubagentJson<SubagentFileData>(`subagents/file?path=${encodeURIComponent(path)}`);
 	subagentFile.value = data;

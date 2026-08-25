@@ -16,3 +16,7 @@
 ### Fixed
 
 - Fixed web slash command autocomplete to keep scrolling through all matches and order commands like the TUI.
+- Fixed the footer and session state not staying in sync while the TUI view was open: the app now re-syncs on a new `session_reloaded` event (broadcast when the bridge notices the TUI wrote to the session file), not only when the TUI closes.
+- Fixed the theme picker not switching theme: the dev server proxy did not forward `/themes` (only `/theme`), so the theme list silently fell back to defaults.
+- Fixed the subagents panel's run tabs missing a `key`, and view/output switches showing briefly stale content from the previous view while the new one loaded.
+- Fixed subagent transcript/output/file fetch failures being silently swallowed, which looked like clicking a tab did nothing; failures now show a toast.

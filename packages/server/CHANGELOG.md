@@ -27,6 +27,8 @@
 - Removed the standalone terminal link from the server home page.
 - Fixed extension UI requests only reaching the last attached rpc_stream client: requests now fan out to all stream clients, dialog responses are first-response-wins, and other clients receive `extension_ui_cancel`.
 - Fixed spawning RPC child processes under Node (the `./rpc-entry` package subpath only declares an `import` condition; resolution now uses `import.meta.resolve`).
+- Fixed the `/theme/<name>.json` endpoint (used by the web UI's theme picker) always returning 404: it appended `.json` to a theme name that already carried it from the request path.
+- Fixed the supervised instance record (cwd, session id/file) going stale after closing the TUI view from the web UI, since `tui_close` can change any of those (the TUI can `/cd` or `/new` while attached) but was not in the set of commands that refresh it.
 
 ## [0.82.1] - 2026-07-25
 

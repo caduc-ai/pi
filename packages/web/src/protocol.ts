@@ -298,6 +298,7 @@ export type AgentSessionEvent =
 	| { type: "terminal_exit"; reason?: string }
 	| { type: "tui_output"; data: string }
 	| { type: "tui_exit"; reason?: string }
+	| { type: "session_reloaded" }
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: Record<string, unknown> }
 	| {
 			type: "tool_execution_update";

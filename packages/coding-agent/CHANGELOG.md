@@ -18,6 +18,11 @@
 - Added PWA manifest MIME support for `pi --web`, allowing the web UI's install metadata to be served correctly.
 - Added a TUI attach mode to the RPC protocol: `tui_open`, `tui_input`, `tui_resize`, and `tui_close` commands plus `tui_output` and `tui_exit` events, letting a client attach the real pi interactive TUI to its own session over a tmux-backed pty (same wire shape as the `terminal_*` family). Only one process may write to a session at a time, so `prompt`, `steer`, and `follow_up` are rejected while a TUI is attached; closing the TUI or its process exiting reloads the session from disk so headless state reflects whatever the TUI wrote. See [rpc.md](docs/rpc.md#tui).
 
+### Fixed
+
+- Fixed RPC clients not seeing changes the TUI made (e.g. switching models from its own selector) until the TUI was closed: the bridge now watches the session file while a TUI is attached and reloads it (debounced ~300ms), broadcasting a new `session_reloaded` event. See [rpc.md](docs/rpc.md#tui).
+- Fixed the `/theme/<name>.json` endpoint in `pi --web`'s standalone web server (used by `pi --web --view`) always returning 404: it compared the theme name including the `.json` suffix from the request path against names that never have one.
+
 ## [0.82.1] - 2026-07-25
 
 ### New Features

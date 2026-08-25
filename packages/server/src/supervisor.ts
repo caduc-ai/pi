@@ -179,6 +179,9 @@ function cloneInstance(record: InstanceRecord): InstanceRecord {
 // - change_cwd moves the session to another working location, changing cwd and sessionFile
 // - set_session_name changes a persisted session detail we may want reflected externally
 // - prompt can materialize or advance persisted session state after the child processes it
+// - tui_close reloads the session from disk (the TUI is a separate process with its own
+//   in-memory copy and can change cwd via /cd, or model/sessionId via /new), so the
+//   instance record can go stale the same way a switch_session/change_cwd would
 const SESSION_METADATA_COMMANDS: ReadonlySet<RpcCommand["type"]> = new Set([
 	"new_session",
 	"switch_session",
@@ -187,6 +190,7 @@ const SESSION_METADATA_COMMANDS: ReadonlySet<RpcCommand["type"]> = new Set([
 	"clone",
 	"set_session_name",
 	"prompt",
+	"tui_close",
 ]);
 
 function shouldRefreshSessionMetadata(command: RpcCommand): boolean {

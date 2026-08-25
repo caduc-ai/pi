@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -172,6 +172,36 @@ describe("tui_* over RPC", () => {
 
 			await receive({ id: "3", type: "tui_input", data: "AA==" });
 			expect(client.responseFor("tui_input")?.success).toBe(false);
+		});
+
+		it("reloads the session and notifies clients while the TUI is still open, when the session file changes", async () => {
+			const { client, receive, switchSessionCalls, sessionFile } = await setup();
+			await receive({ id: "1", type: "tui_open", cols: 80, rows: 24 });
+
+			// Simulate the TUI (a separate process) writing to the session file, e.g.
+			// switching models from its own selector.
+			appendFileSync(
+				sessionFile,
+				`${JSON.stringify({
+					type: "model_change",
+					id: "ext-write",
+					parentId: null,
+					timestamp: new Date().toISOString(),
+					provider: "faux",
+					modelId: "faux-2",
+				})}\n`,
+			);
+
+			// Debounced ~300ms; give it slack for the reload itself to complete.
+			await new Promise((resolve) => setTimeout(resolve, 700));
+
+			expect(switchSessionCalls).toEqual([sessionFile]);
+			expect(client.messages.some((m) => m.type === "session_reloaded")).toBe(true);
+			// tui_exit/tui_close were not sent: the TUI is still attached, so it's still blocking writes.
+			expect(client.messages.some((m) => m.type === "tui_exit")).toBe(false);
+
+			await receive({ id: "2", type: "prompt", message: "hello" });
+			expect(client.responseFor("prompt")?.success).toBe(false);
 		});
 	});
 });

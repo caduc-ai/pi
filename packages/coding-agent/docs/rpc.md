@@ -635,6 +635,11 @@ Ctrl+D) or is closed with `tui_close`, the bridge reloads the session from disk
 so in-memory state reflects whatever the TUI wrote. Clients should re-sync
 (`get_state`, `get_messages`, ...) after `tui_close` or `tui_exit`.
 
+While the TUI is open, the bridge also watches the session file and reloads it
+(debounced ~300ms) whenever the TUI writes to it, for example switching models
+from the TUI's own selector. Each such reload broadcasts `session_reloaded`;
+clients should re-sync then too, not only on `tui_close`/`tui_exit`.
+
 #### tui_open
 
 Open (or re-attach to) the TUI. Idempotent: repeated calls return the same
@@ -1239,6 +1244,19 @@ from disk by the time this is sent; clients should re-sync (`get_state`,
 {
   "type": "tui_exit",
   "reason": "control-client-exited"
+}
+```
+
+### session_reloaded
+
+Emitted while the TUI is open (not on `tui_close`/`tui_exit`, which have their
+own signal) whenever the bridge notices the session file changed on disk and
+reloads it, for example the TUI switching models from its own selector.
+Clients should re-sync (`get_state`, `get_messages`, ...).
+
+```json
+{
+  "type": "session_reloaded"
 }
 ```
 
