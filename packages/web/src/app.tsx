@@ -5,7 +5,7 @@ import { Footer } from "./components/footer.tsx";
 import { MarkdownView } from "./components/markdown-view.tsx";
 import { ForkPicker, ModelPicker } from "./components/pickers.tsx";
 import { SubagentsPanel } from "./components/subagents.tsx";
-import { TerminalView } from "./components/terminal.tsx";
+import { TerminalView, TuiView } from "./components/terminal.tsx";
 import {
 	activePanel,
 	commandResult,
@@ -15,6 +15,8 @@ import {
 	subagentRuns,
 	terminalOpen,
 	toggleSubagentsPanel,
+	toggleTui,
+	tuiActive,
 	widgets,
 } from "./state.ts";
 
@@ -73,6 +75,14 @@ function Header() {
 			>
 				{">_"}
 			</button>
+			<button
+				type="button"
+				class={`header-terminal ${tuiActive.value ? "active" : ""}`}
+				title="Toggle TUI"
+				onClick={() => void toggleTui()}
+			>
+				tui
+			</button>
 			<span
 				class={`connection-dot ${isConnected ? "online" : "offline"}`}
 				title={isConnected ? "Connected" : "Disconnected"}
@@ -124,6 +134,8 @@ export function App() {
 			<Header />
 			{activePanel.value === "subagents" ? (
 				<SubagentsPanel />
+			) : tuiActive.value ? (
+				<TuiView />
 			) : (
 				<>
 					<ChatList />

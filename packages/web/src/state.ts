@@ -385,6 +385,16 @@ function applyEvent(event: AgentSessionEvent): void {
 			pushToast(event.reason ? `Terminal exited (${event.reason})` : "Terminal exited", "info");
 			break;
 
+		case "tui_output":
+			tuiOutput.value = { data: event.data, seq: tuiOutputSeq++ };
+			break;
+
+		case "tui_exit":
+			tuiActive.value = false;
+			pushToast(event.reason ? `TUI exited (${event.reason})` : "TUI exited", "info");
+			void sync();
+			break;
+
 		default:
 			break;
 	}
@@ -494,6 +504,29 @@ export const terminalOpen = signal(false);
  */
 export const terminalOutput = signal<{ data: string; seq: number } | undefined>(undefined);
 let terminalOutputSeq = 0;
+
+/**
+ * Whether the TUI view is showing in place of the chat area. Unlike the
+ * terminal panel, this replaces ChatList/CommandResultCard/WidgetAreas/Editor
+ * rather than docking alongside them: the TUI and the chat view render the
+ * same session and should not both be visible at once.
+ */
+export const tuiActive = signal(false);
+/** Latest TUI output chunk, same shape and purpose as terminalOutput. */
+export const tuiOutput = signal<{ data: string; seq: number } | undefined>(undefined);
+let tuiOutputSeq = 0;
+
+/** Toggle the TUI view. Closing sends tui_close and resyncs the chat view. */
+export async function toggleTui(): Promise<void> {
+	if (tuiActive.value) {
+		tuiActive.value = false;
+		const response = await client.command({ type: "tui_close" });
+		reportFailure(response, "Failed to close TUI");
+		await sync();
+		return;
+	}
+	tuiActive.value = true;
+}
 
 /** Transient card shown at the bottom of the chat (e.g. /session output). */
 export const commandResult = signal<{ title: string; markdown: string } | undefined>(undefined);

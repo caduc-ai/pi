@@ -616,6 +616,81 @@ Response:
 {"type": "response", "command": "terminal_close", "success": true}
 ```
 
+### TUI
+
+The real pi interactive TUI, attached to this bridge's current session file and
+running as a separate process inside its own tmux session (same transport as
+`terminal_*` above: base64 payloads, `termId`/`replay` on open).
+
+Unlike `terminal_*`, only one process may write to a session at a time. While a
+TUI is open, `prompt`, `steer`, and `follow_up` fail with `"TUI is attached to
+this session"`. Read-only commands, `bash`, `terminal_*`, and subagent
+inspection are unaffected.
+
+`tui_open` fails if the session is currently streaming or compacting, or if it
+has no session file (ephemeral `--no-session` runs cannot be attached to).
+
+When the TUI exits (the tmux session dies, e.g. the user quit with Ctrl+C or
+Ctrl+D) or is closed with `tui_close`, the bridge reloads the session from disk
+so in-memory state reflects whatever the TUI wrote. Clients should re-sync
+(`get_state`, `get_messages`, ...) after `tui_close` or `tui_exit`.
+
+#### tui_open
+
+Open (or re-attach to) the TUI. Idempotent: repeated calls return the same
+`termId`.
+
+```json
+{"type": "tui_open", "cols": 100, "rows": 30}
+```
+
+Response:
+```json
+{"type": "response", "command": "tui_open", "success": true,
+ "data": {"termId": "pi-12345-a1b2c3", "cols": 100, "rows": 30, "replay": "<base64>"}}
+```
+
+#### tui_input
+
+Send raw bytes to the TUI, as if typed.
+
+```json
+{"type": "tui_input", "data": "ZWNobyBoaQo="}
+```
+
+Response:
+```json
+{"type": "response", "command": "tui_input", "success": true}
+```
+
+Fails with `"No TUI is open"` if called before `tui_open`.
+
+#### tui_resize
+
+Resize the TUI.
+
+```json
+{"type": "tui_resize", "cols": 132, "rows": 43}
+```
+
+Response:
+```json
+{"type": "response", "command": "tui_resize", "success": true}
+```
+
+#### tui_close
+
+Kill the TUI process and its tmux session, then reload the session from disk.
+
+```json
+{"type": "tui_close"}
+```
+
+Response:
+```json
+{"type": "response", "command": "tui_close", "success": true}
+```
+
 ### Session
 
 #### get_session_stats
@@ -1137,6 +1212,32 @@ Emitted when the shell or its tmux session goes away (for example the user ran
 ```json
 {
   "type": "terminal_exit",
+  "reason": "control-client-exited"
+}
+```
+
+### tui_output
+
+Emitted for each chunk of TUI output, broadcast to every attached client.
+`data` is base64-encoded raw bytes including ANSI escape sequences.
+
+```json
+{
+  "type": "tui_output",
+  "data": "aGkNCg=="
+}
+```
+
+### tui_exit
+
+Emitted when the TUI process or its tmux session goes away (for example the
+user quit with Ctrl+C or Ctrl+D). The bridge has already reloaded the session
+from disk by the time this is sent; clients should re-sync (`get_state`,
+`get_messages`, ...).
+
+```json
+{
+  "type": "tui_exit",
   "reason": "control-client-exited"
 }
 ```

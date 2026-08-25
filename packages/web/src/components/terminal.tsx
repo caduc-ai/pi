@@ -1,8 +1,10 @@
+import type { Signal } from "@preact/signals";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTerm } from "@xterm/xterm";
+import type { RefObject } from "preact";
 import { useEffect, useRef } from "preact/hooks";
-import type { TerminalOpenData } from "../protocol.ts";
-import { client, dataAs, terminalOpen, terminalOutput } from "../state.ts";
+import type { RpcCommand, TerminalOpenData } from "../protocol.ts";
+import { client, dataAs, terminalOpen, terminalOutput, tuiActive, tuiOutput } from "../state.ts";
 
 /** Keys a touch keyboard cannot produce, exposed as buttons on narrow screens. */
 const MOBILE_KEYS: Array<{ label: string; bytes: number[] }> = [
@@ -16,6 +18,32 @@ const MOBILE_KEYS: Array<{ label: string; bytes: number[] }> = [
 	{ label: "↑", bytes: [0x1b, 0x5b, 0x41] },
 	{ label: "→", bytes: [0x1b, 0x5b, 0x43] },
 ];
+
+/**
+ * The terminal_* and tui_* RPC command families share an identical wire shape
+ * (base64 payloads, {termId, cols, rows, replay} on open); this is the only
+ * thing that differs between the two xterm-backed views.
+ */
+interface TerminalCommandFamily {
+	open: (cols: number, rows: number) => RpcCommand;
+	input: (data: string) => RpcCommand;
+	resize: (cols: number, rows: number) => RpcCommand;
+	outputSignal: Signal<{ data: string; seq: number } | undefined>;
+}
+
+const terminalFamily: TerminalCommandFamily = {
+	open: (cols, rows) => ({ type: "terminal_open", cols, rows }),
+	input: (data) => ({ type: "terminal_input", data }),
+	resize: (cols, rows) => ({ type: "terminal_resize", cols, rows }),
+	outputSignal: terminalOutput,
+};
+
+const tuiFamily: TerminalCommandFamily = {
+	open: (cols, rows) => ({ type: "tui_open", cols, rows }),
+	input: (data) => ({ type: "tui_input", data }),
+	resize: (cols, rows) => ({ type: "tui_resize", cols, rows }),
+	outputSignal: tuiOutput,
+};
 
 /**
  * Read a theme CSS custom property. The web UI populates --pi-* from the same
@@ -41,13 +69,19 @@ function decodeBase64(data: string): string {
 	return new TextDecoder("utf-8").decode(bytes, { stream: true });
 }
 
-export function TerminalView() {
-	const hostRef = useRef<HTMLDivElement | null>(null);
-	const termRef = useRef<XTerm | null>(null);
-	const isOpen = terminalOpen.value;
-
+/**
+ * Wire an xterm.js instance to a terminal_* or tui_* RPC command family:
+ * open on mount, forward keystrokes as input, stream output, and resize on
+ * host resize. Shared by TerminalView and TuiView.
+ */
+function useXtermSession(
+	active: boolean,
+	hostRef: RefObject<HTMLDivElement | null>,
+	termRef: RefObject<XTerm | null>,
+	family: TerminalCommandFamily,
+): void {
 	useEffect(() => {
-		if (!isOpen || !hostRef.current) return;
+		if (!active || !hostRef.current) return;
 
 		const term = new XTerm({
 			cursorBlink: true,
@@ -72,21 +106,17 @@ export function TerminalView() {
 
 		// Local echo is the shell's job; forward every keystroke as raw bytes.
 		const dataSub = term.onData((data) => {
-			void client.command({ type: "terminal_input", data: encodeUtf8(data) });
+			void client.command(family.input(encodeUtf8(data)));
 		});
 
 		void (async () => {
-			const response = await client.command({
-				type: "terminal_open",
-				cols: term.cols,
-				rows: term.rows,
-			});
+			const response = await client.command(family.open(term.cols, term.rows));
 			if (disposed) return;
 			if (!response.success) {
-				term.writeln(`\r\n\x1b[31m${"error" in response ? response.error : "Failed to open terminal"}\x1b[0m`);
+				term.writeln(`\r\n\x1b[31m${"error" in response ? response.error : "Failed to open"}\x1b[0m`);
 				return;
 			}
-			const data = dataAs<TerminalOpenData>(response, "terminal_open");
+			const data = dataAs<TerminalOpenData>(response, response.command);
 			if (data?.replay) {
 				term.write(decodeBase64(data.replay));
 			}
@@ -94,13 +124,13 @@ export function TerminalView() {
 		})();
 
 		// Stream server output into xterm.
-		const unsubscribeOutput = terminalOutput.subscribe((chunk) => {
+		const unsubscribeOutput = family.outputSignal.subscribe((chunk) => {
 			if (chunk) term.write(decodeBase64(chunk.data));
 		});
 
 		const resizeObserver = new ResizeObserver(() => {
 			fit.fit();
-			void client.command({ type: "terminal_resize", cols: term.cols, rows: term.rows });
+			void client.command(family.resize(term.cols, term.rows));
 		});
 		resizeObserver.observe(hostRef.current);
 
@@ -112,7 +142,42 @@ export function TerminalView() {
 			term.dispose();
 			termRef.current = null;
 		};
-	}, [isOpen]);
+		// `family` is a stable module-level constant; only `active` should retrigger this.
+	}, [active]);
+}
+
+function sendMobileKey(command: (data: string) => RpcCommand, bytes: number[]): void {
+	let binary = "";
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	void client.command(command(btoa(binary)));
+}
+
+function MobileKeyRow({ family, onKey }: { family: TerminalCommandFamily; onKey?: () => void }) {
+	return (
+		<div class="terminal-keys">
+			{MOBILE_KEYS.map((key) => (
+				<button
+					type="button"
+					key={key.label}
+					class="terminal-key"
+					onClick={() => {
+						sendMobileKey(family.input, key.bytes);
+						onKey?.();
+					}}
+				>
+					{key.label}
+				</button>
+			))}
+		</div>
+	);
+}
+
+export function TerminalView() {
+	const hostRef = useRef<HTMLDivElement | null>(null);
+	const termRef = useRef<XTerm | null>(null);
+	const isOpen = terminalOpen.value;
+
+	useXtermSession(isOpen, hostRef, termRef, terminalFamily);
 
 	if (!isOpen) return null;
 
@@ -132,23 +197,30 @@ export function TerminalView() {
 				</button>
 			</div>
 			<div class="terminal-host" ref={hostRef} />
-			<div class="terminal-keys">
-				{MOBILE_KEYS.map((key) => (
-					<button
-						type="button"
-						key={key.label}
-						class="terminal-key"
-						onClick={() => {
-							let binary = "";
-							for (const byte of key.bytes) binary += String.fromCharCode(byte);
-							void client.command({ type: "terminal_input", data: btoa(binary) });
-							termRef.current?.focus();
-						}}
-					>
-						{key.label}
-					</button>
-				))}
-			</div>
+			<MobileKeyRow family={terminalFamily} onKey={() => termRef.current?.focus()} />
+		</div>
+	);
+}
+
+/**
+ * Fills the chat area with the real pi interactive TUI, in place of
+ * ChatList/CommandResultCard/WidgetAreas/Editor. No close button of its own:
+ * the header `tui` button (see app.tsx) owns toggling, since closing also
+ * needs to send tui_close and resync the chat view.
+ */
+export function TuiView() {
+	const hostRef = useRef<HTMLDivElement | null>(null);
+	const termRef = useRef<XTerm | null>(null);
+	const isActive = tuiActive.value;
+
+	useXtermSession(isActive, hostRef, termRef, tuiFamily);
+
+	if (!isActive) return null;
+
+	return (
+		<div class="tui-view">
+			<div class="tui-host" ref={hostRef} />
+			<MobileKeyRow family={tuiFamily} onKey={() => termRef.current?.focus()} />
 		</div>
 	);
 }

@@ -19,12 +19,8 @@ import type {
 	ExtensionWidgetOptions,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
-import {
-	disposeTerminal,
-	getExistingTerminal,
-	getOrCreateTerminal,
-	type TmuxTerminal,
-} from "../../core/terminal/index.ts";
+import { resolvePiSelfInvocation } from "../../core/self-invocation.ts";
+import { disposeTerminal, getExistingTerminal, getOrCreateTerminal, TmuxTerminal } from "../../core/terminal/index.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import {
 	RPC_BUILTIN_COMMANDS,
@@ -63,6 +59,17 @@ export interface RpcBridgeOptions {
 	 * can then still be offered to RPC clients via offerDialog().
 	 */
 	bindExtensions?: boolean;
+	/**
+	 * Override the argv used to spawn the TUI terminal (tui_open). Defaults to
+	 * relaunching pi itself attached to the current session file. Tests inject
+	 * a lightweight stand-in so they do not need a real model or provider.
+	 */
+	resolveTuiCommand?: (context: { sessionFile: string; cwd: string }) => string[];
+}
+
+function defaultResolveTuiCommand(context: { sessionFile: string }): string[] {
+	const invocation = resolvePiSelfInvocation();
+	return [invocation.command, ...invocation.args, "--session", context.sessionFile];
 }
 
 function success<T extends RpcCommand["type"]>(id: string | undefined, command: T, data?: object | null): RpcResponse {
@@ -103,6 +110,16 @@ export class RpcBridge {
 	 * deliberately outside the session graph, so rebindSession() must not touch it.
 	 */
 	private unsubscribeTerminal: (() => void) | undefined;
+	/**
+	 * The TUI terminal (tui_open/tui_input/tui_resize/tui_close): a real pi
+	 * interactive process attached to this bridge's current session file.
+	 * Session-scoped and owned by this bridge, unlike the process-scoped shell
+	 * terminal above, so it is not touched by rebindSession() either: switching
+	 * sessions while a TUI is attached is prevented by the blocking guard on
+	 * write commands, and the TUI's own exit/close paths trigger the reload.
+	 */
+	private tuiTerminal: TmuxTerminal | undefined;
+	private unsubscribeTui: (() => void) | undefined;
 
 	private readonly options: RpcBridgeOptions;
 
@@ -131,10 +148,15 @@ export class RpcBridge {
 		this.unsubscribeBackpressure?.();
 		this.unsubscribeTerminal?.();
 		this.unsubscribeTerminal = undefined;
+		this.unsubscribeTui?.();
+		this.unsubscribeTui = undefined;
 		this.clients.clear();
 		// The terminal is scoped to the pi run; a graceful shutdown ends it so a
 		// tmux session is not leaked per run.
 		await disposeTerminal();
+		const tuiTerminal = this.tuiTerminal;
+		this.tuiTerminal = undefined;
+		await tuiTerminal?.dispose();
 	}
 
 	/**
@@ -155,6 +177,50 @@ export class RpcBridge {
 			unsubscribeOutput();
 			unsubscribeExit();
 		};
+	}
+
+	/**
+	 * Stream TUI output to all clients, same broadcast model as the shell
+	 * terminal above. Unlike the shell terminal, exit reloads the session from
+	 * disk: the TUI writes to the same session file this bridge holds open, so
+	 * in-memory state must catch up with whatever happened while it was attached.
+	 */
+	private attachTuiStream(terminal: TmuxTerminal): void {
+		if (this.unsubscribeTui) return;
+		const unsubscribeOutput = terminal.subscribe((data) => {
+			this.broadcast({ type: "tui_output", data: data.toString("base64") });
+		});
+		const unsubscribeExit = terminal.onExit((reason) => {
+			this.broadcast({ type: "tui_exit", reason });
+			this.unsubscribeTui?.();
+			this.unsubscribeTui = undefined;
+			this.tuiTerminal = undefined;
+			void this.reloadSessionFromDisk();
+		});
+		this.unsubscribeTui = () => {
+			unsubscribeOutput();
+			unsubscribeExit();
+		};
+	}
+
+	/**
+	 * Reload the current session from disk after the TUI (a separate process
+	 * with its own in-memory copy) exits or is closed, so this bridge's state
+	 * reflects whatever it wrote. Reuses the same internal path as the
+	 * `switch_session` command, pointed at the same file.
+	 */
+	private async reloadSessionFromDisk(): Promise<void> {
+		const sessionFile = this.session.sessionFile;
+		if (!sessionFile) return;
+		const result = await this.runtimeHost.switchSession(sessionFile);
+		if (!result.cancelled) {
+			await this.rebindSession();
+		}
+	}
+
+	/** True while a TUI is attached and `type` would race writes with it. */
+	private isBlockedByTui(type: RpcCommand["type"]): boolean {
+		return Boolean(this.tuiTerminal?.isAlive) && (type === "prompt" || type === "steer" || type === "follow_up");
 	}
 
 	attachClient(connection: RpcClientConnection): RpcClientHandle {
@@ -522,6 +588,10 @@ export class RpcBridge {
 		const id = command.id;
 		const session = this.session;
 
+		if (this.isBlockedByTui(command.type)) {
+			return error(id, command.type, "TUI is attached to this session");
+		}
+
 		switch (command.type) {
 			// =================================================================
 			// Prompting
@@ -763,6 +833,95 @@ export class RpcBridge {
 				this.unsubscribeTerminal = undefined;
 				await disposeTerminal();
 				return success(id, "terminal_close");
+			}
+
+			// =================================================================
+			// TUI
+			//
+			// The real pi interactive TUI, attached to this same session file and
+			// running as a separate process in a tmux session (like the terminal
+			// above). Only one writer may touch the session at a time, so `prompt`,
+			// `steer` and `follow_up` are rejected while this is alive (see
+			// isBlockedByTui). Closing or exiting reloads the session from disk.
+			// =================================================================
+
+			case "tui_open": {
+				try {
+					if (session.isStreaming || session.isCompacting) {
+						return error(id, "tui_open", "Cannot open the TUI while the session is streaming or compacting");
+					}
+
+					if (this.tuiTerminal?.isAlive) {
+						// Reattach: resize to this client's viewport and replay scrollback.
+						if (command.cols !== undefined && command.rows !== undefined) {
+							await this.tuiTerminal.resize(command.cols, command.rows);
+						}
+						this.attachTuiStream(this.tuiTerminal);
+						const replay = await this.tuiTerminal.captureReplay();
+						const { cols, rows } = this.tuiTerminal.size;
+						return success(id, "tui_open", {
+							termId: this.tuiTerminal.id,
+							cols,
+							rows,
+							replay: Buffer.from(replay, "utf8").toString("base64"),
+						});
+					}
+
+					const sessionFile = session.sessionFile;
+					if (!sessionFile) {
+						return error(id, "tui_open", "TUI requires a persisted session (this session has no session file)");
+					}
+					const cwd = session.sessionManager.getCwd();
+					const resolveTuiCommand = this.options.resolveTuiCommand ?? defaultResolveTuiCommand;
+
+					const terminal = await TmuxTerminal.create({
+						cwd,
+						cols: command.cols,
+						rows: command.rows,
+						env: { ...process.env, TERM: process.env.TERM || "xterm-256color" },
+						command: resolveTuiCommand({ sessionFile, cwd }),
+					});
+					this.tuiTerminal = terminal;
+					this.attachTuiStream(terminal);
+					const replay = await terminal.captureReplay();
+					const { cols, rows } = terminal.size;
+					return success(id, "tui_open", {
+						termId: terminal.id,
+						cols,
+						rows,
+						replay: Buffer.from(replay, "utf8").toString("base64"),
+					});
+				} catch (e) {
+					return error(id, "tui_open", e instanceof Error ? e.message : String(e));
+				}
+			}
+
+			case "tui_input": {
+				if (!this.tuiTerminal?.isAlive) {
+					return error(id, "tui_input", "No TUI is open");
+				}
+				await this.tuiTerminal.write(Buffer.from(command.data, "base64"));
+				return success(id, "tui_input");
+			}
+
+			case "tui_resize": {
+				if (!this.tuiTerminal?.isAlive) {
+					return error(id, "tui_resize", "No TUI is open");
+				}
+				await this.tuiTerminal.resize(command.cols, command.rows);
+				return success(id, "tui_resize");
+			}
+
+			case "tui_close": {
+				const terminal = this.tuiTerminal;
+				this.unsubscribeTui?.();
+				this.unsubscribeTui = undefined;
+				this.tuiTerminal = undefined;
+				if (terminal) {
+					await terminal.dispose();
+				}
+				await this.reloadSessionFromDisk();
+				return success(id, "tui_close");
 			}
 
 			// =================================================================

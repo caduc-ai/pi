@@ -1044,6 +1044,23 @@ select.theme-toggle {
 	padding: 4px 6px;
 }
 
+/* ============================================================================
+   TUI view (real pi interactive TUI, replaces the chat area while active)
+   ========================================================================== */
+
+.tui-view {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.tui-host {
+	flex: 1 1 auto;
+	min-height: 0;
+	padding: 4px 6px;
+}
+
 /* Keys a touch keyboard cannot send; hidden where a physical keyboard is likely. */
 .terminal-keys {
 	display: none;
