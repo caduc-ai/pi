@@ -607,7 +607,7 @@ function renderIndexPage(): string {
 		.pin-icon { color: #d7a55b; flex-shrink: 0; display: inline-flex; align-items: center; }
 		.kebab-wrap { position: relative; flex-shrink: 0; }
 		.kebab-btn { padding: 4px 8px; font-size: 1.1em; line-height: 1; }
-		.kebab-menu { position: absolute; right: 0; top: calc(100% + 4px); background: #1a1a1a; border: 1px solid #444; border-radius: 4px; z-index: 10; display: flex; flex-direction: column; min-width: 130px; overflow: hidden; }
+		.kebab-menu { position: absolute; right: 0; top: calc(100% + 4px); background: #1a1a1a; border: 1px solid #444; border-radius: 4px; z-index: 60; display: flex; flex-direction: column; min-width: 130px; overflow: hidden; }
 		/* display:flex above would otherwise override the UA's [hidden] { display:none }, leaving every menu visible. */
 		.kebab-menu[hidden] { display: none; }
 		.section-label { color: #999; font-size: 0.9em; margin: 1em 0 0.3em; }
@@ -1038,6 +1038,8 @@ function renderIndexPage(): string {
 	document.addEventListener("click", function(e) {
 		if (!e.target.closest(".kebab-wrap")) closeAllKebabMenus();
 	});
+	// A fixed-position menu would float detached from its row once anything scrolls.
+	document.addEventListener("scroll", closeAllKebabMenus, true);
 	document.addEventListener("keydown", function(e) {
 		if (e.key === "Escape") {
 			closeAllKebabMenus();
@@ -1062,6 +1064,15 @@ function renderIndexPage(): string {
 					closeAllKebabMenus();
 					menu.hidden = wasOpen;
 					kebabBtn.setAttribute("aria-expanded", wasOpen ? "false" : "true");
+					if (!wasOpen) {
+						// Fixed positioning escapes scroll/overflow clipping (e.g. inside the
+						// inactive-sessions modal panel).
+						var rect = kebabBtn.getBoundingClientRect();
+						menu.style.position = "fixed";
+						menu.style.top = Math.min(rect.bottom + 4, window.innerHeight - menu.offsetHeight - 8) + "px";
+						menu.style.left = Math.max(8, rect.right - menu.offsetWidth) + "px";
+						menu.style.right = "auto";
+					}
 				};
 			}
 		});
