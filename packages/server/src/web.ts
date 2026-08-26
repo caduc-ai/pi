@@ -664,6 +664,8 @@ function renderIndexPage(): string {
 		.ns-bar select { font-family: inherit; font-size: 0.85em; background: #1a1a1a; color: #e6e6e6; border: 1px solid #3a3a3a; padding: 4px 8px; border-radius: 4px; }
 		.ns-bar button { font-family: inherit; font-size: 0.85em; background: #1a1a1a; color: #e6e6e6; border: 1px solid #3a3a3a; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
 		.ns-bar button:disabled { opacity: 0.4; cursor: default; }
+		.ns-bar input { font-family: inherit; font-size: 0.85em; background: #1a1a1a; color: #e6e6e6; border: 1px solid #3a3a3a; padding: 4px 8px; border-radius: 4px; width: 160px; }
+		#ns-create-form { display: inline-flex; align-items: center; gap: 6px; }
 		.ns-tag { color: #b294bb; border-color: #3a2a4a; }
 		.spawn-form button:hover { background: #3a6a5f; }
 		.spawn-result { margin-top: 0.5em; font-size: 0.8em; }
@@ -694,6 +696,8 @@ function renderIndexPage(): string {
 		.kebab-menu button { all: unset; box-sizing: border-box; cursor: pointer; padding: 10px 12px; font-size: 0.85em; font-family: inherit; color: #e6e6e6; white-space: nowrap; min-height: 38px; display: flex; align-items: center; }
 		.kebab-menu button:hover, .kebab-menu button:focus { background: #2a2a2a; }
 		.kebab-menu button.danger { color: #e06060; }
+		.kebab-menu-label { padding: 8px 12px 2px; font-size: 0.75em; color: #777; }
+		.rename-input { font-family: inherit; font-size: inherit; background: #1a1a1a; color: #e6e6e6; border: 1px solid #3a6a5f; padding: 2px 6px; border-radius: 3px; min-width: 200px; }
 		.session-list { min-height: 1.5em; }
 		.archived-section { margin-top: 1em; }
 		.archived-section summary { cursor: pointer; color: #999; font-size: 0.9em; padding: 0.4em 0; }
@@ -759,7 +763,13 @@ function renderIndexPage(): string {
 		<label for="ns-select" id="ns-label">Namespace</label>
 		<select id="ns-select" onchange="onNamespaceSwitch()"></select>
 		<button type="button" id="ns-delete-btn" onclick="deleteNamespacePrompt()">Delete namespace…</button>
-		<button type="button" class="select-trigger" id="ns-create-link" style="display:none" onclick="createFirstNamespace()">+ New namespace…</button>
+		<button type="button" class="select-trigger" id="ns-create-link" style="display:none" onclick="showCreateNamespace()">+ New namespace…</button>
+		<span id="ns-create-form" style="display:none">
+			<input type="text" id="ns-create-input" placeholder="new-namespace" maxlength="32" autocomplete="off"/>
+			<button type="button" onclick="submitCreateNamespace()">Create</button>
+			<button type="button" onclick="hideCreateNamespace()">Cancel</button>
+			<span class="meta error" id="ns-create-error"></span>
+		</span>
 	</div>
 	<div class="dash-columns">
 	<div class="dash-main">
@@ -954,28 +964,60 @@ function renderIndexPage(): string {
 		}
 	}
 
-	function createFirstNamespace() {
-		createNamespacePrompt(function(name) {
-			if (name) {
-				currentNamespace = name;
-				localStorage.setItem("pi-dashboard-namespace", currentNamespace);
-			}
+	// Inline creation form instead of window.prompt: installed PWAs and some
+	// mobile webviews silently suppress prompt/alert, which made the create
+	// button appear to do nothing.
+	function showCreateNamespace() {
+		document.getElementById("ns-create-form").style.display = "";
+		document.getElementById("ns-create-link").style.display = "none";
+		document.getElementById("ns-create-error").textContent = "";
+		var input = document.getElementById("ns-create-input");
+		input.value = "";
+		input.focus();
+	}
+
+	function hideCreateNamespace() {
+		document.getElementById("ns-create-form").style.display = "none";
+		renderNamespaceSwitcher();
+	}
+
+	async function submitCreateNamespace() {
+		var input = document.getElementById("ns-create-input");
+		var errorEl = document.getElementById("ns-create-error");
+		var name = input.value.trim();
+		if (!name) { errorEl.textContent = "name required"; return; }
+		if (!/^[a-z0-9-_]{1,32}$/.test(name)) { errorEl.textContent = "lowercase letters, digits, - or _ only"; return; }
+		try {
+			var res = await fetch("/api/namespaces", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name: name }),
+			});
+			var data = await res.json();
+			if (!data.ok) { errorEl.textContent = data.error || "failed"; return; }
+			if (allNamespaces.indexOf(name) === -1) allNamespaces.push(name);
+			currentNamespace = name;
+			localStorage.setItem("pi-dashboard-namespace", currentNamespace);
+			document.getElementById("ns-create-form").style.display = "none";
 			renderNamespaceSwitcher();
 			renderSpawnNamespaceSelect();
-			if (name) loadSessions();
-		});
+			loadSessions();
+		} catch (error) {
+			errorEl.textContent = error.message;
+		}
 	}
+
+	document.getElementById("ns-create-input").addEventListener("keydown", function(e) {
+		if (e.key === "Enter") { e.preventDefault(); submitCreateNamespace(); }
+		if (e.key === "Escape") hideCreateNamespace();
+	});
 
 	function onNamespaceSwitch() {
 		var sel = document.getElementById("ns-select");
 		var value = sel.value;
 		if (value === "__new__") {
-			createNamespacePrompt(function(name) {
-				if (name) currentNamespace = name;
-				renderNamespaceSwitcher();
-				renderSpawnNamespaceSelect();
-				if (name) { localStorage.setItem("pi-dashboard-namespace", currentNamespace); loadSessions(); }
-			});
+			renderNamespaceSwitcher();
+			showCreateNamespace();
 			return;
 		}
 		currentNamespace = value;
@@ -984,26 +1026,7 @@ function renderIndexPage(): string {
 		loadSessions();
 	}
 
-	async function createNamespacePrompt(cb) {
-		var name = window.prompt("New namespace name (lowercase letters, digits, - or _, max 32 chars):");
-		if (name === null) { cb(null); return; }
-		name = name.trim();
-		if (!name) { cb(null); return; }
-		try {
-			var res = await fetch("/api/namespaces", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ name: name }),
-			});
-			var data = await res.json();
-			if (!data.ok) { window.alert("Failed to create namespace: " + (data.error || "unknown")); cb(null); return; }
-			if (allNamespaces.indexOf(name) === -1) allNamespaces.push(name);
-			cb(name);
-		} catch (error) {
-			window.alert("Failed to create namespace: " + error.message);
-			cb(null);
-		}
-	}
+
 
 	function renderSpawnNamespaceSelect() {
 		var wrap = document.getElementById("spawn-namespace-wrap");
@@ -1023,14 +1046,9 @@ function renderIndexPage(): string {
 	document.getElementById("spawn-namespace").addEventListener("change", function() {
 		var sel = this;
 		if (sel.value !== "__new__") return;
-		createNamespacePrompt(function(name) {
-			if (!name) { renderSpawnNamespaceSelect(); return; }
-			var opt = document.createElement("option");
-			opt.value = name;
-			opt.textContent = name;
-			sel.insertBefore(opt, sel.lastElementChild);
-			sel.value = name;
-		});
+		// Reset to a real value and open the dialog-free inline creator up top.
+		renderSpawnNamespaceSelect();
+		showCreateNamespace();
 	});
 
 	// Working-directory autocomplete: a small debounced dropdown backed by
@@ -1441,17 +1459,37 @@ function renderIndexPage(): string {
 		}
 
 		if (action === "rename") {
-			var current = row.querySelector('[data-role="name"]').textContent;
-			var newName = window.prompt("Rename session:", current);
-			if (newName === null || !newName.trim()) return;
-			var res = await fetch("/api/sessions/rename", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, name: newName, namespace: namespace }),
+			// Inline edit instead of window.prompt (suppressed in installed PWAs).
+			var nameEl = row.querySelector('[data-role="name"]');
+			var currentName = nameEl.textContent;
+			var editor = document.createElement("input");
+			editor.type = "text";
+			editor.className = "rename-input";
+			editor.value = currentName;
+			nameEl.replaceWith(editor);
+			editor.focus();
+			editor.select();
+			var done = false;
+			var finish = async function(save) {
+				if (done) return;
+				done = true;
+				var newName = editor.value.trim();
+				if (save && newName && newName !== currentName) {
+					var res = await fetch("/api/sessions/rename", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, name: newName, namespace: namespace }),
+					});
+					var data = await res.json();
+					if (!data.ok) console.error("Rename failed:", data.error);
+				}
+				loadSessions();
+			};
+			editor.addEventListener("keydown", function(e) {
+				if (e.key === "Enter") { e.preventDefault(); void finish(true); }
+				if (e.key === "Escape") void finish(false);
 			});
-			var data = await res.json();
-			if (!data.ok) window.alert("Rename failed: " + (data.error || "unknown"));
-			loadSessions();
+			editor.addEventListener("blur", function() { void finish(true); });
 			return;
 		}
 
@@ -1480,19 +1518,38 @@ function renderIndexPage(): string {
 		}
 
 		if (action === "move") {
-			var known = allNamespaces.join(", ");
-			var target = window.prompt("Move to namespace (existing: " + known + "):", namespace);
-			if (target === null) return;
-			target = target.trim();
-			if (!target || target === namespace) return;
-			var res = await fetch("/api/sessions/move", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, namespace: target, fromNamespace: namespace }),
+			// Dialog-free namespace chooser: a kebab-style submenu at the row's kebab
+			// button (window.prompt is suppressed in installed PWAs).
+			var anchor = row.querySelector(".kebab-btn");
+			var wrap = row.querySelector(".kebab-wrap");
+			if (!anchor || !wrap) return;
+			var targets = allNamespaces.filter(function(n) { return n !== namespace; });
+			if (targets.length === 0) return;
+			var menu = document.createElement("div");
+			menu.className = "kebab-menu";
+			menu.innerHTML = '<div class="kebab-menu-label">Move to…</div>' + targets.map(function(n) {
+				return '<button type="button" data-ns="' + esc(n) + '">' + esc(n) + '</button>';
+			}).join("");
+			wrap.appendChild(menu);
+			var rect = anchor.getBoundingClientRect();
+			menu.style.position = "fixed";
+			menu.style.top = Math.min(rect.bottom + 4, window.innerHeight - 200) + "px";
+			menu.style.left = Math.max(8, rect.right - 150) + "px";
+			menu.style.right = "auto";
+			menu.querySelectorAll("[data-ns]").forEach(function(btn) {
+				btn.onclick = async function(e) {
+					e.stopPropagation();
+					menu.remove();
+					var res = await fetch("/api/sessions/move", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, namespace: btn.getAttribute("data-ns"), fromNamespace: namespace }),
+					});
+					var data = await res.json();
+					if (!data.ok) console.error("Move failed:", data.error);
+					loadSessions();
+				};
 			});
-			var data = await res.json();
-			if (!data.ok) window.alert("Move failed: " + (data.error || "unknown"));
-			loadSessions();
 			return;
 		}
 
