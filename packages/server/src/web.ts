@@ -583,7 +583,8 @@ function renderIndexPage(): string {
 		.spawn-form input[type="text"], .spawn-form button { font-family: inherit; font-size: 13px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #3a3a3a; padding: 7px 9px; border-radius: 4px; }
 		.spawn-form input[type="text"] { width: 100%; margin-top: 4px; }
 		.spawn-form input[type="text"]::placeholder { color: #555; }
-		.spawn-form button { cursor: pointer; background: #2a4a3f; border-color: #3a6a5f; margin-top: 0.7em; padding: 7px 16px; }
+		.spawn-form button { cursor: pointer; background: #2a4a3f; border-color: #3a6a5f; padding: 7px 16px; }
+		.spawn-actions { display: flex; align-items: center; gap: 12px; margin-top: 0.7em; }
 		.spawn-form button:hover { background: #3a6a5f; }
 		.spawn-result { margin-top: 0.5em; font-size: 0.8em; }
 		.spawn-result.error { color: #e06060; }
@@ -648,7 +649,7 @@ function renderIndexPage(): string {
 		.pagination { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 0.6em 0; font-size: 0.85em; }
 		.pagination .row-btn:disabled { opacity: 0.4; cursor: default; }
 		.pagination .row-btn:disabled:hover { background: #1a1a1a; }
-		.spawn-check { display: flex !important; align-items: center; gap: 6px; margin: 0.55em 0 0 !important; font-size: 0.78em !important; color: #777 !important; cursor: pointer; }
+		.spawn-check { display: flex !important; align-items: center; gap: 6px; margin: 0 !important; font-size: 0.78em !important; color: #777 !important; cursor: pointer; }
 		/* Custom checkbox: the native control looks jarring on the dark theme. */
 		.spawn-check input { appearance: none; -webkit-appearance: none; width: 14px; height: 14px; margin: 0; border: 1px solid #444; border-radius: 3px; background: #1a1a1a; cursor: pointer; position: relative; flex-shrink: 0; }
 		.spawn-check input:hover { border-color: #3a6a5f; }
@@ -700,8 +701,10 @@ function renderIndexPage(): string {
 					<div class="suggest-list" id="cwd-suggest-list" style="display:none"></div>
 				</div>
 			</label>
-			<label class="spawn-check"><input type="checkbox" name="mkdir" id="spawn-mkdir"/> Create directory if it doesn't exist</label>
-			<button type="submit">Spawn</button>
+			<div class="spawn-actions">
+				<button type="submit">Spawn</button>
+				<label class="spawn-check" title="Create the directory if it doesn't exist"><input type="checkbox" name="mkdir" id="spawn-mkdir"/> Create if missing</label>
+			</div>
 		</form>
 		<div class="spawn-result" id="spawn-result"></div>
 	</div>
