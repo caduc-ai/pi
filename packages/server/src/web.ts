@@ -577,14 +577,15 @@ function renderIndexPage(): string {
 		ul { list-style: none; padding: 0; }
 		li { margin: 0.6em 0; word-break: break-all; }
 		.meta { color: #666; font-size: 0.85em; margin-left: 0.5em; }
-		.spawn-form { margin-top: 2em; padding-top: 1.5em; border-top: 1px solid #333; }
-		.spawn-form h2 { font-size: 1em; margin-bottom: 0.5em; }
-		.spawn-form label { display: block; margin: 0.4em 0; font-size: 0.9em; color: #999; }
-		.spawn-form input, .spawn-form button { font-family: inherit; font-size: 15px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; padding: 10px 12px; border-radius: 4px; }
-		.spawn-form input { width: 100%; max-width: 320px; }
-		.spawn-form button { cursor: pointer; background: #2a4a3f; border-color: #3a6a5f; margin-top: 0.8em; min-height: 44px; }
+		.spawn-form { margin-top: 2em; padding: 0.9em 1em 1em; border: 1px solid #2a2a2a; border-radius: 6px; background: #121212; }
+		.spawn-form h2 { font-size: 0.95em; margin: 0 0 0.7em; }
+		.spawn-form label { display: block; margin: 0; font-size: 0.8em; color: #888; }
+		.spawn-form input[type="text"], .spawn-form button { font-family: inherit; font-size: 13px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #3a3a3a; padding: 7px 9px; border-radius: 4px; }
+		.spawn-form input[type="text"] { width: 100%; margin-top: 4px; }
+		.spawn-form input[type="text"]::placeholder { color: #555; }
+		.spawn-form button { cursor: pointer; background: #2a4a3f; border-color: #3a6a5f; margin-top: 0.7em; padding: 7px 16px; }
 		.spawn-form button:hover { background: #3a6a5f; }
-		.spawn-result { margin-top: 0.5em; font-size: 0.9em; }
+		.spawn-result { margin-top: 0.5em; font-size: 0.8em; }
 		.spawn-result.error { color: #e06060; }
 		.spawn-result.success { color: #60c060; }
 		.session-row { display: flex; justify-content: space-between; align-items: center; padding: 0.5em 0; gap: 8px; flex-wrap: wrap; }
@@ -647,11 +648,11 @@ function renderIndexPage(): string {
 		.pagination { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 0.6em 0; font-size: 0.85em; }
 		.pagination .row-btn:disabled { opacity: 0.4; cursor: default; }
 		.pagination .row-btn:disabled:hover { background: #1a1a1a; }
-		.spawn-check { display: flex; align-items: center; gap: 8px; margin: 0.6em 0; font-size: 0.85em; color: #999; cursor: pointer; }
-		.spawn-check input { width: 16px; height: 16px; margin: 0; }
+		.spawn-check { display: flex !important; align-items: center; gap: 6px; margin: 0.55em 0 0 !important; font-size: 0.78em !important; color: #777 !important; cursor: pointer; }
+		.spawn-check input { width: 13px; height: 13px; margin: 0; accent-color: #3a6a5f; }
 		#cwd-suggest { position: relative; }
-		.suggest-list { position: absolute; z-index: 5; background: #1a1a1a; border: 1px solid #444; border-top: none; border-radius: 0 0 4px 4px; max-width: 320px; max-height: 200px; overflow-y: auto; }
-		.suggest-list div { padding: 8px 12px; font-size: 0.9em; cursor: pointer; }
+		.suggest-list { position: absolute; left: 0; right: 0; z-index: 5; background: #1a1a1a; border: 1px solid #444; border-top: none; border-radius: 0 0 4px 4px; max-height: 200px; overflow-y: auto; }
+		.suggest-list div { padding: 7px 9px; font-size: 0.8em; cursor: pointer; }
 		.suggest-list div:hover { background: #2a2a2a; }
 		@media (max-width: 600px) {
 			body { padding: 10px; }
