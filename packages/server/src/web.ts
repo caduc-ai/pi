@@ -649,7 +649,12 @@ function renderIndexPage(): string {
 		.pagination .row-btn:disabled { opacity: 0.4; cursor: default; }
 		.pagination .row-btn:disabled:hover { background: #1a1a1a; }
 		.spawn-check { display: flex !important; align-items: center; gap: 6px; margin: 0.55em 0 0 !important; font-size: 0.78em !important; color: #777 !important; cursor: pointer; }
-		.spawn-check input { width: 13px; height: 13px; margin: 0; accent-color: #3a6a5f; }
+		/* Custom checkbox: the native control looks jarring on the dark theme. */
+		.spawn-check input { appearance: none; -webkit-appearance: none; width: 14px; height: 14px; margin: 0; border: 1px solid #444; border-radius: 3px; background: #1a1a1a; cursor: pointer; position: relative; flex-shrink: 0; }
+		.spawn-check input:hover { border-color: #3a6a5f; }
+		.spawn-check input:checked { background: #2a4a3f; border-color: #3a6a5f; }
+		.spawn-check input:checked::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid #cfe8df; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+		.spawn-check:hover { color: #999 !important; }
 		#cwd-suggest { position: relative; }
 		.suggest-list { position: absolute; left: 0; right: 0; z-index: 5; background: #1a1a1a; border: 1px solid #444; border-top: none; border-radius: 0 0 4px 4px; max-height: 200px; overflow-y: auto; }
 		.suggest-list div { padding: 7px 9px; font-size: 0.8em; cursor: pointer; }
