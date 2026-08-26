@@ -101,8 +101,48 @@ function handleConnectionChange(isConnected: boolean, closeCode?: number): void 
 		// sidebar (e.g. another session was pinned/unpinned while this one dropped).
 		void refreshPinnedSessions();
 	} else if (closeCode === INSTANCE_UNREACHABLE_CLOSE_CODE) {
-		sessionUnreachable.value = true;
+		// The instance id is gone, but the session itself may have come back under
+		// a NEW instance id (server restart respawns pinned sessions). Follow it
+		// before falling back to the full-page "Session not found" state.
+		void followRespawnedSession();
 	}
+}
+
+/**
+ * After a 4404, poll the dashboard API for a live instance backing the same
+ * session file and redirect to it. Pinned sessions auto-respawn on server
+ * restart with a fresh id, so an open tab should follow rather than dead-end.
+ */
+async function followRespawnedSession(): Promise<void> {
+	const sessionFile = sessionState.value?.sessionFile;
+	if (sessionFile) {
+		for (let attempt = 0; attempt < 5; attempt++) {
+			try {
+				const response = await fetch("/api/dashboard-sessions", { cache: "no-store" });
+				if (response.ok) {
+					const data = (await response.json()) as {
+						ok?: boolean;
+						sessions?: Array<{ id?: string; sessionFile?: string; status?: string }>;
+					};
+					const revived = data.sessions?.find(
+						(session) =>
+							session.sessionFile === sessionFile &&
+							session.id &&
+							session.id !== instanceId &&
+							(session.status === "online" || session.status === "starting"),
+					);
+					if (revived) {
+						location.href = `/i/${revived.id}/`;
+						return;
+					}
+				}
+			} catch {
+				// Dashboard unreachable (server still restarting); keep polling.
+			}
+			await new Promise((resolve) => setTimeout(resolve, 2000));
+		}
+	}
+	sessionUnreachable.value = true;
 }
 
 export function dataAs<T>(response: RpcResponse, command: string): T | undefined {
