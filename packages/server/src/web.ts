@@ -604,7 +604,7 @@ function renderIndexPage(): string {
 		.badge-error { color: #e06060; border-color: #4a2a2a; }
 		.badge-stopping { color: #d7a55b; border-color: #5a4a2a; }
 		.badge-stopped, .badge-past { color: #999; }
-		.badge-pinned { color: #8abeb7; border-color: #2a4a4a; }
+		.pin-icon { color: #d7a55b; flex-shrink: 0; display: inline-flex; align-items: center; }
 		.kebab-wrap { position: relative; flex-shrink: 0; }
 		.kebab-btn { padding: 4px 8px; font-size: 1.1em; line-height: 1; }
 		.kebab-menu { position: absolute; right: 0; top: calc(100% + 4px); background: #1a1a1a; border: 1px solid #444; border-radius: 4px; z-index: 10; display: flex; flex-direction: column; min-width: 130px; overflow: hidden; }
@@ -959,7 +959,10 @@ function renderIndexPage(): string {
 	function sessionRowHtml(s) {
 		var isLive = s.status === "online" || s.status === "starting";
 		var badge = '<span class="badge badge-' + statusLabel(s) + '">' + statusLabel(s) + '</span>';
-		var pinnedBadge = s.pinned ? '<span class="badge badge-pinned">pinned</span>' : "";
+		// Pinned is shown as an icon in front of the name rather than yet another text badge.
+		var pinIcon = s.pinned
+			? '<span class="pin-icon" title="Pinned"><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M9.5 1.5l5 5-1.2 1.2-.9-.3-2.6 2.6.3 2.4-1.2 1.2-2.6-2.6-3.8 3.8-.7-.7 3.8-3.8L3 7.7l1.2-1.2 2.4.3 2.6-2.6-.3-.9 1.2-1.2z"/></svg></span>'
+			: "";
 		var openBtn = isLive
 			? '<a class="row-btn" href="/i/' + esc(s.id) + '/">Open</a>'
 			: (s.sessionFile ? '<button class="row-btn" data-action="resume">Resume</button>' : "");
@@ -969,8 +972,9 @@ function renderIndexPage(): string {
 			'<div class="session-row" data-id="' + esc(s.id || "") + '" data-path="' + esc(s.sessionFile || "") + '" data-cwd="' + esc(s.cwd || "") + '" data-pinned="' + (s.pinned ? "true" : "false") + '" data-archived="' + (s.archived ? "true" : "false") + '">' +
 				'<input type="checkbox" class="row-select" data-key="' + esc(key) + '"' + checked + ' />' +
 				'<div class="session-main">' +
+					pinIcon +
 					'<span class="session-name" data-role="name">' + esc(s.name) + '</span>' +
-					badge + pinnedBadge +
+					badge +
 					'<span class="meta">' + esc(s.cwd) + '</span>' +
 				'</div>' +
 				'<div class="session-actions">' +
