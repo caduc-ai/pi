@@ -1,5 +1,7 @@
+import { tmpdir } from "node:os";
 import { createAssistantMessageEventStream, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SessionManager } from "../../src/core/session-manager.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
 /**
@@ -95,5 +97,145 @@ describe("AgentSession auto session naming", () => {
 
 		expect(harness.sessionManager.getSessionName()).toBeUndefined();
 		expect(callCount()).toBe(1);
+	});
+
+	/**
+	 * Regression: session names changing by themselves. Root cause was that a new
+	 * AgentSession created by a session reload / resume / respawn while the first
+	 * (async, non-blocking) title generation was still in flight had no way to see
+	 * that naming had already started, so it ran its own independent generation,
+	 * appending a second, likely different, title. The fix persists a reservation
+	 * marker (session_info entry with autoNamed:true, empty name) synchronously
+	 * before the slow title request starts, so any process that (re)loads the
+	 * session file afterward sees the attempt and never retries.
+	 */
+	it("persists an attempted marker before title generation completes, so a reload of the same file never retries", async () => {
+		const sessionDir = tmpdir();
+		const harness = await createHarness({
+			settings: { autoNameSession: true },
+			sessionManager: SessionManager.create(process.cwd(), sessionDir),
+		});
+		harnesses.push(harness);
+
+		let releaseTitle: (() => void) | undefined;
+		let callCount = 0;
+		harness.session.agent.streamFunction = (model) => {
+			callCount++;
+			const stream = createAssistantMessageEventStream();
+			const isTitleCall = callCount === 2;
+			const push = () => {
+				const message = {
+					...fauxAssistantMessage(isTitleCall ? "Stale Title" : "reply"),
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+				};
+				stream.push({ type: "done", reason: "stop", message });
+			};
+			if (isTitleCall) {
+				// Stall the title-generation call: simulates a reload/resume happening
+				// while the request is still in flight.
+				releaseTitle = push;
+			} else {
+				queueMicrotask(push);
+			}
+			return stream;
+		};
+
+		await harness.session.prompt("first message");
+		await vi.waitFor(() => expect(callCount).toBe(2));
+
+		// The reservation must already be on disk before the title request resolves.
+		expect(harness.sessionManager.wasAutoNamingAttempted()).toBe(true);
+		expect(harness.sessionManager.getSessionName()).toBeUndefined();
+
+		const sessionFile = harness.sessionManager.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		const reloaded = SessionManager.open(sessionFile as string);
+		expect(reloaded.wasAutoNamingAttempted()).toBe(true);
+		expect(reloaded.getSessionName()).toBeUndefined();
+
+		// Once the stalled request finally resolves, the real title still lands
+		// (this instance was not disposed, only "reloaded elsewhere").
+		releaseTitle?.();
+		await vi.waitFor(() => expect(harness.sessionManager.getSessionName()).toBe("Stale Title"));
+	});
+
+	it("aborts in-flight title generation on dispose, so a disposed (replaced) session never completes a stale write", async () => {
+		const harness = await createHarness({ settings: { autoNameSession: true } });
+		harnesses.push(harness);
+
+		let releaseTitle: (() => void) | undefined;
+		let callCount = 0;
+		harness.session.agent.streamFunction = (model) => {
+			callCount++;
+			const stream = createAssistantMessageEventStream();
+			const isTitleCall = callCount === 2;
+			const push = () => {
+				const message = {
+					...fauxAssistantMessage(isTitleCall ? "Stale Title" : "reply"),
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+				};
+				stream.push({ type: "done", reason: "stop", message });
+			};
+			if (isTitleCall) {
+				releaseTitle = push;
+			} else {
+				queueMicrotask(push);
+			}
+			return stream;
+		};
+
+		await harness.session.prompt("first message");
+		await vi.waitFor(() => expect(callCount).toBe(2));
+
+		// Simulate the session being replaced (e.g. by switchSession on a reload)
+		// while the title request is still in flight.
+		harness.session.dispose();
+		releaseTitle?.();
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		// The abort must prevent the late write; only the reservation remains.
+		expect(harness.sessionManager.getSessionName()).toBeUndefined();
+		expect(harness.sessionManager.wasAutoNamingAttempted()).toBe(true);
+	});
+
+	it("a user rename while generation is in flight is never overwritten by a late title", async () => {
+		const harness = await createHarness({ settings: { autoNameSession: true } });
+		harnesses.push(harness);
+
+		let releaseTitle: (() => void) | undefined;
+		let callCount = 0;
+		harness.session.agent.streamFunction = (model) => {
+			callCount++;
+			const stream = createAssistantMessageEventStream();
+			const isTitleCall = callCount === 2;
+			const push = () => {
+				const message = {
+					...fauxAssistantMessage(isTitleCall ? "Generated Title" : "reply"),
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+				};
+				stream.push({ type: "done", reason: "stop", message });
+			};
+			if (isTitleCall) {
+				releaseTitle = push;
+			} else {
+				queueMicrotask(push);
+			}
+			return stream;
+		};
+
+		await harness.session.prompt("first message");
+		await vi.waitFor(() => expect(callCount).toBe(2));
+
+		harness.session.setSessionName("User Renamed");
+		releaseTitle?.();
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		expect(harness.sessionManager.getSessionName()).toBe("User Renamed");
 	});
 });

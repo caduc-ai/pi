@@ -97,6 +97,9 @@ function handleConnectionChange(isConnected: boolean, closeCode?: number): void 
 	if (isConnected) {
 		sessionUnreachable.value = false;
 		void sync();
+		// A reconnect is a reasonable moment to also refresh the pinned sessions
+		// sidebar (e.g. another session was pinned/unpinned while this one dropped).
+		void refreshPinnedSessions();
 	} else if (closeCode === INSTANCE_UNREACHABLE_CLOSE_CODE) {
 		sessionUnreachable.value = true;
 	}
@@ -687,6 +690,64 @@ export function stopSubagentPolling(): void {
 		subagentPollTimer = undefined;
 	}
 	subagentPolling.value = false;
+}
+
+// ============================================================================
+// Pinned sessions sidebar
+// ============================================================================
+
+export interface PinnedSessionSummary {
+	id: string;
+	name: string;
+	status: string;
+}
+
+export const pinnedSessions = signal<PinnedSessionSummary[]>([]);
+
+/**
+ * Pinned + live sessions for the in-session sidebar quick-switcher. Pinning is a
+ * pi-server/dashboard concept (InstanceRecord.pinned) with no equivalent under
+ * bare `pi --web`, where /api/dashboard-sessions does not exist, so this is a
+ * no-op there (instanceId is undefined). Stopped pinned sessions are omitted
+ * rather than linked: a pinned session auto-respawns while the server is up, so
+ * "stopped" here means genuinely unavailable right now.
+ */
+export async function refreshPinnedSessions(): Promise<void> {
+	if (!instanceId) return;
+	try {
+		const res = await fetch("/api/dashboard-sessions");
+		if (!res.ok) return;
+		const data = (await res.json()) as {
+			ok: boolean;
+			sessions?: Array<{ id?: string; name: string; status: string; pinned: boolean }>;
+		};
+		if (!data.ok || !data.sessions) return;
+		pinnedSessions.value = data.sessions
+			.filter(
+				(session): session is { id: string; name: string; status: string; pinned: boolean } =>
+					Boolean(session.id) && session.pinned && (session.status === "online" || session.status === "starting"),
+			)
+			.map((session) => ({ id: session.id, name: session.name, status: session.status }));
+	} catch {
+		// Best-effort: the sidebar keeps its last-known list (or stays empty) on failure.
+	}
+}
+
+let pinnedSessionsPollTimer: ReturnType<typeof setInterval> | undefined;
+
+/** Slow poll (not aggressive) since pin/unpin and spawn/stop are infrequent, manual actions. */
+export function startPinnedSessionsPolling(): void {
+	if (pinnedSessionsPollTimer) return;
+	pinnedSessionsPollTimer = setInterval(() => {
+		void refreshPinnedSessions();
+	}, 30_000);
+}
+
+export function stopPinnedSessionsPolling(): void {
+	if (pinnedSessionsPollTimer) {
+		clearInterval(pinnedSessionsPollTimer);
+		pinnedSessionsPollTimer = undefined;
+	}
 }
 
 function formatTokenCount(count: number): string {

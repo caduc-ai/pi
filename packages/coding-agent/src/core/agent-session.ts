@@ -850,6 +850,7 @@ export class AgentSession {
 			this.abortCompaction();
 			this.abortBranchSummary();
 			this.abortBash();
+			this.abortAutoNameSession();
 			this.agent.abort();
 		} catch {
 			// Dispose must succeed even if an abort hook throws.
@@ -2883,7 +2884,10 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * Set a display name for the current session.
+	 * Set a display name for the current session. Always treated as an explicit
+	 * (non-auto-generated) rename: resets the "auto-naming already attempted"
+	 * marker (SessionManager.wasAutoNamingAttempted), so if the caller later
+	 * clears the name (empty string), auto-naming is allowed to run once more.
 	 */
 	setSessionName(name: string): void {
 		this.sessionManager.appendSessionInfo(name);
@@ -2892,9 +2896,28 @@ export class AgentSession {
 		void this._extensionRunner.emit(event);
 	}
 
-	// Guards auto-naming to at most one attempt per AgentSession instance: once the
-	// first-turn condition is checked (whether or not it fires), never check again.
+	// Guards auto-naming to at most one check per AgentSession instance: once the
+	// first-turn condition is checked (whether or not it fires), never check again
+	// on this instance. The actual "has this session ever been auto-named" state is
+	// persisted (SessionManager.wasAutoNamingAttempted), so it also holds across new
+	// AgentSession instances created by resume, pinned respawn, server restart, or a
+	// session reload (TUI reloadSessionFromDisk / switchSession-to-same-file).
 	private _autoNamingTriggered = false;
+	/**
+	 * Aborts the in-flight title generation request on dispose(), so a session
+	 * replaced mid-generation (e.g. by a reload while the TUI is attached) never
+	 * completes a write after this instance has been superseded. The persisted
+	 * reservation entry (appended synchronously before the request starts, see
+	 * _maybeAutoNameSession) already prevents a second, independent generation
+	 * from the new instance; aborting here just avoids wasting the request and an
+	 * out-of-tree write racing behind it.
+	 */
+	private _autoNamingAbortController: AbortController | undefined;
+
+	abortAutoNameSession(): void {
+		this._autoNamingAbortController?.abort();
+		this._autoNamingAbortController = undefined;
+	}
 
 	/**
 	 * Fire-and-forget model-generated session title after the first turn settles.
@@ -2903,7 +2926,11 @@ export class AgentSession {
 	private _maybeAutoNameSession(): void {
 		if (this._autoNamingTriggered) return;
 		if (!this.settingsManager.getAutoNameSession()) return;
-		if (this.sessionManager.getSessionName()) {
+		// Auto-name at most once ever per session: skip if already named, or if a
+		// previous attempt (success or failure, this instance or an earlier one) was
+		// already recorded. A user rename (including an explicit clear) resets the
+		// attempted marker, allowing exactly one more attempt.
+		if (this.sessionManager.getSessionName() || this.sessionManager.wasAutoNamingAttempted()) {
 			this._autoNamingTriggered = true;
 			return;
 		}
@@ -2920,27 +2947,52 @@ export class AgentSession {
 		if (!firstUser || !firstAssistant) return;
 
 		this._autoNamingTriggered = true;
+		// Persist the attempt synchronously, before the (slow, async) title request
+		// starts. This closes the race where a session reload or a new process
+		// (resume, pinned respawn, restart) creates another AgentSession on the same
+		// file while generation is still in flight: that new instance loads this
+		// reservation from disk and skips its own attempt instead of generating an
+		// independent, likely different, title.
+		this.sessionManager.appendSessionInfo("", { autoNamed: true });
 		const userText = contentText((firstUser.message as Message).content ?? []);
 		const assistantText = contentText((firstAssistant.message as Message).content ?? []);
-		void this._runAutoNameSession(model, userText, assistantText);
+		this._autoNamingAbortController = new AbortController();
+		void this._runAutoNameSession(model, userText, assistantText, this._autoNamingAbortController.signal);
 	}
 
-	private async _runAutoNameSession(model: Model<any>, userText: string, assistantText: string): Promise<void> {
+	private async _runAutoNameSession(
+		model: Model<any>,
+		userText: string,
+		assistantText: string,
+		signal: AbortSignal,
+	): Promise<void> {
 		try {
 			const { apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
+			if (signal.aborted) return;
 			const title = await generateSessionTitle(
 				model,
 				userText,
 				assistantText,
-				{ apiKey, headers, env },
+				{ apiKey, headers, env, signal },
 				this.agent.streamFunction,
 			);
-			// Do not overwrite a name the user set while the title was generating.
+			if (signal.aborted) return;
+			// The reservation entry appended before this request means getSessionName()
+			// only differs from empty here if the user renamed (or an extension called
+			// setSessionName) while the title was generating; never overwrite that.
 			if (title && !this.sessionManager.getSessionName()) {
-				this.setSessionName(title);
+				this.sessionManager.appendSessionInfo(title, { autoNamed: true });
+				const event = { type: "session_info_changed", name: this.sessionManager.getSessionName() } as const;
+				this._emit(event);
+				void this._extensionRunner.emit(event);
 			}
 		} catch (error) {
+			if (signal.aborted) return;
 			console.error(`Auto session naming failed: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			if (this._autoNamingAbortController?.signal === signal) {
+				this._autoNamingAbortController = undefined;
+			}
 		}
 	}
 

@@ -320,10 +320,18 @@ export class ServerSupervisor {
 		}
 		// cwd follows the session: /cd moves the instance's working location, and the
 		// dashboard review link is built from the record's cwd.
+		//
+		// sessionName is only applied when non-empty: get_state can transiently report
+		// no name (e.g. auto-naming is still generating in the background, fire-and-
+		// forget from agent-session.ts _maybeAutoNameSession, well after this command's
+		// response already returned) even though a name was set moments earlier. There is
+		// no supported way to clear a session's name from the dashboard today, so an
+		// explicit clear does not need to flow through here; never regress the cached
+		// name to a worse fallback (see resolveInstanceDisplayName in web.ts).
 		this.updateRecord(live, {
 			sessionId: response.data.sessionId,
 			sessionFile: response.data.sessionFile,
-			sessionName: response.data.sessionName,
+			...(response.data.sessionName ? { sessionName: response.data.sessionName } : {}),
 			...(response.data.cwd ? { cwd: response.data.cwd } : {}),
 		});
 	}

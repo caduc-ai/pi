@@ -274,6 +274,12 @@ export function SubagentsPanel() {
 					</div>
 					<div class="subagents-content">
 						{loading && !file ? <div class="subagents-loading">Loading…</div> : null}
+						{!loading && !file && view === "transcript" && !selected.transcriptPath ? (
+							<div class="subagents-empty">No transcript available for this run.</div>
+						) : null}
+						{!loading && !file && view === "output" && !hasOutput ? (
+							<div class="subagents-empty">No output available for this run.</div>
+						) : null}
 						{view === "outputs" && selected.outputs ? (
 							<div class="subagents-files">
 								{selected.outputs.map((output) => (

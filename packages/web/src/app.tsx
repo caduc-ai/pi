@@ -4,6 +4,7 @@ import { Editor } from "./components/editor.tsx";
 import { Footer } from "./components/footer.tsx";
 import { MarkdownView } from "./components/markdown-view.tsx";
 import { ForkPicker, ModelPicker } from "./components/pickers.tsx";
+import { PinnedSidebar } from "./components/sidebar.tsx";
 import { SubagentsPanel } from "./components/subagents.tsx";
 import { TerminalView, TuiView } from "./components/terminal.tsx";
 import {
@@ -148,27 +149,30 @@ export function App() {
 		return <UnreachableView />;
 	}
 	return (
-		<div class="app">
-			<Header />
-			{activePanel.value === "subagents" ? (
-				<SubagentsPanel />
-			) : tuiActive.value ? (
-				<TuiView />
-			) : (
-				<>
-					<ChatList />
-					<CommandResultCard />
-					<WidgetArea placement="aboveEditor" />
-					<Editor />
-					<WidgetArea placement="belowEditor" />
-				</>
-			)}
-			<TerminalView />
-			<Footer />
-			<DialogHost />
-			<ToastHost />
-			<ModelPicker />
-			<ForkPicker />
+		<div class="app-shell">
+			<PinnedSidebar />
+			<div class="app">
+				<Header />
+				{activePanel.value === "subagents" ? (
+					<SubagentsPanel />
+				) : tuiActive.value ? (
+					<TuiView />
+				) : (
+					<>
+						<ChatList />
+						<CommandResultCard />
+						<WidgetArea placement="aboveEditor" />
+						<Editor />
+						<WidgetArea placement="belowEditor" />
+					</>
+				)}
+				<TerminalView />
+				<Footer />
+				<DialogHost />
+				<ToastHost />
+				<ModelPicker />
+				<ForkPicker />
+			</div>
 		</div>
 	);
 }

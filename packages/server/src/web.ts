@@ -302,6 +302,16 @@ function listSubagentRuns(cwd: string, sessionFile?: string): SubagentRunSummary
 	// Async (background) runs: status.json per dir under the user-scoped temp dir.
 	// The extension records the originating session FILE PATH in status.sessionId,
 	// and async runs that also write project artifacts are already listed above.
+	//
+	// The child agent's own transcript/output/meta for each step are NOT under the
+	// temp run dir: they live next to the session file, in
+	// <sessionDir>/subagent-artifacts/ (see status.steps[i].transcriptPath, an
+	// absolute path written by the pi-subagents extension; getArtifactPaths() in
+	// its shared/artifacts.ts derives the sibling _output.md the same way). The
+	// run dir itself additionally holds orchestration-level logs (output-0.log,
+	// subagent-log-<runId>.md) which are exposed as named "Files" so they are
+	// reachable even when a step transcript/output is missing (e.g. a run that
+	// failed before the child agent produced one).
 	if (sessionFile) {
 		const asyncDir = subagentAsyncDir();
 		if (fs.existsSync(asyncDir)) {
@@ -314,9 +324,40 @@ function listSubagentRuns(cwd: string, sessionFile?: string): SubagentRunSummary
 					const runId = (status.runId as string | undefined) ?? dirName;
 					if (foregroundRunIds.has(runId)) continue;
 					const state = status.state as string | undefined;
-					const agents = Array.isArray(status.steps)
-						? (status.steps as Array<{ agent?: string }>).map((step) => step.agent ?? "subagent")
-						: [(status.mode as string | undefined) ?? "subagent"];
+					const steps = Array.isArray(status.steps) ? (status.steps as Array<Record<string, unknown>>) : [];
+					const agents =
+						steps.length > 0
+							? steps.map((step) => (step.agent as string | undefined) ?? "subagent")
+							: [(status.mode as string | undefined) ?? "subagent"];
+					// The active step for a running chain, or the last step once finished; that
+					// step's own artifacts are what the Transcript/Output tabs show.
+					const stepIndex = typeof status.currentStep === "number" ? status.currentStep : steps.length - 1;
+					const activeStep = steps[stepIndex] ?? steps[steps.length - 1];
+					const stepTranscriptAbsolute =
+						typeof activeStep?.transcriptPath === "string" ? activeStep.transcriptPath : undefined;
+
+					let transcriptPath: string | undefined;
+					let transcriptBytes: number | undefined;
+					let outputPath: string | undefined;
+					if (stepTranscriptAbsolute && fs.existsSync(stepTranscriptAbsolute)) {
+						const stepArtifactsDir = path.dirname(stepTranscriptAbsolute);
+						const transcriptBase = path.basename(stepTranscriptAbsolute);
+						transcriptPath = path.join("session-artifacts", transcriptBase);
+						transcriptBytes = fileBytes(stepTranscriptAbsolute);
+						const outputBase = transcriptBase.replace(/_transcript\.jsonl$/, "_output.md");
+						if (outputBase !== transcriptBase && fs.existsSync(path.join(stepArtifactsDir, outputBase))) {
+							outputPath = path.join("session-artifacts", outputBase);
+						}
+					}
+
+					const outputs: NonNullable<SubagentRunSummary["outputs"]> = [];
+					for (const runLevelFile of ["output-0.log", `subagent-log-${runId}.md`]) {
+						const absolute = path.join(dir, runLevelFile);
+						const bytes = fileBytes(absolute);
+						if (bytes === undefined) continue;
+						outputs.push({ name: runLevelFile, path: path.join("async", dirName, runLevelFile), bytes });
+					}
+
 					runs.set(`async:${dirName}`, {
 						key: `async:${dirName}`,
 						source: "async",
@@ -326,8 +367,17 @@ function listSubagentRuns(cwd: string, sessionFile?: string): SubagentRunSummary
 							state === "complete" ? "done" : state === "failed" || state === "stopped" ? "failed" : "running",
 						startedAt: status.startedAt as number | undefined,
 						endedAt: status.endedAt as number | undefined,
+						durationMs: activeStep?.durationMs as number | undefined,
+						model: activeStep?.model as string | undefined,
+						exitCode: activeStep?.exitCode as number | undefined,
+						toolCount: activeStep?.toolCount as number | undefined,
+						usage: activeStep?.tokens as Record<string, unknown> | undefined,
 						error: status.error as string | undefined,
 						task: status.description as string | undefined,
+						transcriptPath,
+						transcriptBytes,
+						outputPath,
+						outputs: outputs.length > 0 ? outputs : undefined,
 					});
 				}
 			} catch {
@@ -343,12 +393,32 @@ function listSubagentRuns(cwd: string, sessionFile?: string): SubagentRunSummary
 	});
 }
 
-/** Resolve a path relative to the instance's .pi-subagents dir, rejecting escapes. */
-function resolveSubagentArtifact(cwd: string, relative: string): string | undefined {
-	const base = path.join(cwd, ".pi-subagents");
+function resolveWithinBase(base: string, relative: string): string | undefined {
 	const resolved = path.resolve(base, relative);
 	if (resolved !== base && !resolved.startsWith(base + path.sep)) return undefined;
 	return resolved;
+}
+
+/**
+ * Resolve an artifact path returned by listSubagentRuns to an absolute file path,
+ * rejecting any escape from the relevant root. Three roots, matched by prefix
+ * (see listSubagentRuns for what writes into each):
+ * - "session-artifacts/...": async run child transcripts/outputs, next to the
+ *   session file (<sessionDir>/subagent-artifacts/). Requires a sessionFile.
+ * - "async/<runId>/...": the async run's own orchestration-level logs, under the
+ *   user-scoped temp dir.
+ * - anything else: foreground run artifacts under <cwd>/.pi-subagents/.
+ */
+function resolveSubagentArtifact(cwd: string, sessionFile: string | undefined, relative: string): string | undefined {
+	if (relative.startsWith("session-artifacts/")) {
+		if (!sessionFile) return undefined;
+		const base = path.join(path.dirname(sessionFile), "subagent-artifacts");
+		return resolveWithinBase(base, relative.slice("session-artifacts/".length));
+	}
+	if (relative.startsWith("async/")) {
+		return resolveWithinBase(subagentAsyncDir(), relative.slice("async/".length));
+	}
+	return resolveWithinBase(path.join(cwd, ".pi-subagents"), relative);
 }
 
 function escapeHtml(text: string): string {
@@ -533,16 +603,31 @@ function renderIndexPage(): string {
 		.badge-stopping { color: #d7a55b; border-color: #5a4a2a; }
 		.badge-stopped, .badge-past { color: #999; }
 		.badge-pinned { color: #8abeb7; border-color: #2a4a4a; }
+		.kebab-wrap { position: relative; flex-shrink: 0; }
+		.kebab-btn { padding: 4px 8px; font-size: 1.1em; line-height: 1; }
+		.kebab-menu { position: absolute; right: 0; top: calc(100% + 4px); background: #1a1a1a; border: 1px solid #444; border-radius: 4px; z-index: 10; display: flex; flex-direction: column; min-width: 130px; overflow: hidden; }
+		.kebab-menu button { all: unset; box-sizing: border-box; cursor: pointer; padding: 10px 12px; font-size: 0.85em; font-family: inherit; color: #e6e6e6; white-space: nowrap; min-height: 38px; display: flex; align-items: center; }
+		.kebab-menu button:hover, .kebab-menu button:focus { background: #2a2a2a; }
+		.kebab-menu button.danger { color: #e06060; }
 		.session-list { min-height: 1.5em; }
 		.archived-section { margin-top: 1em; }
 		.archived-section summary { cursor: pointer; color: #999; font-size: 0.9em; padding: 0.4em 0; }
-		.row-select { margin-right: 4px; flex-shrink: 0; width: 18px; height: 18px; display: none; }
-		body.select-mode .row-select { display: inline-block; }
-		.sessions-header { display: flex; align-items: center; gap: 10px; margin-top: 1.5em; }
+		/* Space is always reserved (visibility, not display) so entering select mode never
+		   shifts row content; only visibility toggles. */
+		.row-select { margin-right: 4px; flex-shrink: 0; width: 18px; height: 18px; visibility: hidden; }
+		body.select-mode .row-select { visibility: visible; }
+		/* Fixed-height header: the normal (title + Select trigger) and select-mode (bulk
+		   toolbar) rows share the same slot so switching between them never pushes the
+		   session list down. */
+		.sessions-header { display: flex; align-items: center; min-height: 34px; margin-top: 1.5em; }
+		.sessions-header-normal, .sessions-header-select { display: flex; align-items: center; gap: 10px; width: 100%; font-size: 0.9em; }
 		.sessions-header h2 { font-size: 1em; margin: 0; }
-		.sessions-header .row-btn { min-height: 28px; }
-		.bulk-toolbar { display: flex; align-items: center; gap: 8px; padding: 0.5em 0; border-bottom: 1px solid #2a2a2a; margin-bottom: 0.3em; font-size: 0.9em; }
-		.bulk-toolbar .row-btn { min-height: 30px; }
+		.select-trigger { margin-left: auto; background: none; border: none; color: #8abeb7; font-family: inherit; font-size: 0.85em; cursor: pointer; padding: 4px 6px; }
+		.select-trigger:hover { text-decoration: underline; }
+		.sessions-header-select .row-btn { min-height: 28px; }
+		.pagination { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 0.6em 0; font-size: 0.85em; }
+		.pagination .row-btn:disabled { opacity: 0.4; cursor: default; }
+		.pagination .row-btn:disabled:hover { background: #1a1a1a; }
 		#cwd-suggest { position: relative; }
 		.suggest-list { position: absolute; z-index: 5; background: #1a1a1a; border: 1px solid #444; border-top: none; border-radius: 0 0 4px 4px; max-width: 320px; max-height: 200px; overflow-y: auto; }
 		.suggest-list div { padding: 8px 12px; font-size: 0.9em; cursor: pointer; }
@@ -553,6 +638,7 @@ function renderIndexPage(): string {
 			.spawn-form button { width: 100%; }
 			.session-row { flex-direction: column; align-items: stretch; }
 			.session-actions { justify-content: flex-start; }
+			.kebab-wrap { margin-left: auto; }
 			.suggest-list { max-width: none; }
 		}
 	</style>
@@ -560,17 +646,24 @@ function renderIndexPage(): string {
 <body>
 	<h1>pi</h1>
 	<div class="sessions-header">
-		<h2>Sessions</h2>
-		<button class="row-btn" id="select-mode-btn" onclick="toggleSelectMode()">Select</button>
-	</div>
-	<div class="bulk-toolbar" id="bulk-toolbar" style="display:none">
-		<span><span id="bulk-count">0</span> selected</span>
-		<button class="row-btn" onclick="selectAllSessions()">Select all</button>
-		<button class="row-btn" onclick="bulkArchive()">Archive</button>
-		<button class="row-btn danger" onclick="bulkDelete()">Delete</button>
-		<button class="row-btn" onclick="toggleSelectMode()">Cancel</button>
+		<div class="sessions-header-normal" id="sessions-header-normal">
+			<h2>Sessions</h2>
+			<button class="select-trigger" id="select-mode-btn" onclick="toggleSelectMode()">Select</button>
+		</div>
+		<div class="sessions-header-select" id="bulk-toolbar" style="display:none">
+			<span><span id="bulk-count">0</span> selected</span>
+			<button class="row-btn" onclick="selectAllSessions()">Select all</button>
+			<button class="row-btn" onclick="bulkArchive()">Archive</button>
+			<button class="row-btn danger" onclick="bulkDelete()">Delete</button>
+			<button class="row-btn" onclick="toggleSelectMode()">Cancel</button>
+		</div>
 	</div>
 	<div id="session-list" class="session-list"><span class="meta">Loading...</span></div>
+	<div class="pagination" id="pagination" style="display:none">
+		<button class="row-btn" id="page-prev" onclick="changePage(-1)">&larr; Prev</button>
+		<span class="meta" id="page-indicator"></span>
+		<button class="row-btn" id="page-next" onclick="changePage(1)">Next &rarr;</button>
+	</div>
 	<details class="archived-section" id="archived-section" style="display:none">
 		<summary>Archived (<span id="archived-count">0</span>)</summary>
 		<div id="archived-list" class="session-list"></div>
@@ -674,25 +767,41 @@ function renderIndexPage(): string {
 	}
 
 	// Bulk selection (archive/delete). Pin/unpin stays per-row only. Checkboxes are
-	// hidden until the user enters select mode via the Select button.
+	// hidden (visibility, not display) until the user enters select mode via the
+	// Select trigger.
 	var selectedKeys = {};
 	var selectMode = false;
 	function rowKey(s) { return s.id ? ("id:" + s.id) : ("path:" + s.sessionFile); }
 
+	// Pagination: only the active (non-pinned-first-sorted, non-archived) list is
+	// paged. Archived stays in its collapsed <details>, unpaginated. Slicing
+	// happens client-side against the already-sorted list from the server, so
+	// "Select all" (which only walks rendered .row-select checkboxes) naturally
+	// selects just the current page.
+	var PAGE_SIZE = 10;
+	var currentPage = 1;
+	var lastActiveSessions = [];
+
+	// The normal header (title + Select trigger) and the bulk toolbar occupy the
+	// same fixed-height slot (see .sessions-header), so entering/leaving select
+	// mode swaps their visibility in place instead of adding/removing a row.
 	function updateBulkToolbar() {
+		var normal = document.getElementById("sessions-header-normal");
 		var toolbar = document.getElementById("bulk-toolbar");
 		var count = document.getElementById("bulk-count");
 		count.textContent = Object.keys(selectedKeys).length;
+		normal.style.display = selectMode ? "none" : "";
 		toolbar.style.display = selectMode ? "" : "none";
 	}
 
 	function toggleSelectMode() {
 		selectMode = !selectMode;
 		document.body.classList.toggle("select-mode", selectMode);
-		document.getElementById("select-mode-btn").style.display = selectMode ? "none" : "";
 		if (!selectMode) clearSelection(); else updateBulkToolbar();
 	}
 
+	// Only iterates rendered checkboxes, i.e. the current page: selecting "all"
+	// selects what's visible, not the entire (possibly multi-page) session list.
 	function selectAllSessions() {
 		document.querySelectorAll(".row-select").forEach(function(cb) {
 			cb.checked = true;
@@ -751,12 +860,13 @@ function renderIndexPage(): string {
 		loadSessions();
 	}
 
+	// Per-row actions: only the name, status, and the primary Open/Resume action
+	// are always visible. Rename/Pin/Archive/Delete live in a kebab ("...") menu
+	// so the row stays compact; see attachRowHandlers for the open/close wiring.
 	function sessionRowHtml(s) {
 		var isLive = s.status === "online" || s.status === "starting";
 		var badge = '<span class="badge badge-' + statusLabel(s) + '">' + statusLabel(s) + '</span>';
 		var pinnedBadge = s.pinned ? '<span class="badge badge-pinned">pinned</span>' : "";
-		var pinBtn = '<button class="row-btn' + (s.pinned ? ' active' : '') + '" data-action="pin">' + (s.pinned ? "Unpin" : "Pin") + '</button>';
-		var archiveBtn = '<button class="row-btn" data-action="archive">' + (s.archived ? "Unarchive" : "Archive") + '</button>';
 		var openBtn = isLive
 			? '<a class="row-btn" href="/i/' + esc(s.id) + '/">Open</a>'
 			: (s.sessionFile ? '<button class="row-btn" data-action="resume">Resume</button>' : "");
@@ -771,18 +881,54 @@ function renderIndexPage(): string {
 					'<span class="meta">' + esc(s.cwd) + '</span>' +
 				'</div>' +
 				'<div class="session-actions">' +
-					'<button class="row-btn" data-action="rename">Rename</button>' +
-					pinBtn + archiveBtn + openBtn +
-					'<button class="row-btn danger" data-action="delete">Delete</button>' +
+					openBtn +
+					'<div class="kebab-wrap">' +
+						'<button class="row-btn kebab-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-label="More actions">&#8942;</button>' +
+						'<div class="kebab-menu" hidden>' +
+							'<button type="button" data-action="rename">Rename</button>' +
+							'<button type="button" data-action="pin">' + (s.pinned ? "Unpin" : "Pin") + '</button>' +
+							'<button type="button" data-action="archive">' + (s.archived ? "Unarchive" : "Archive") + '</button>' +
+							'<button type="button" class="danger" data-action="delete">Delete</button>' +
+						'</div>' +
+					'</div>' +
 				'</div>' +
 			'</div>';
 	}
 
+	// Only one kebab menu open at a time; closes on outside click or Escape.
+	function closeAllKebabMenus() {
+		document.querySelectorAll(".kebab-menu").forEach(function(menu) {
+			menu.hidden = true;
+			var btn = menu.previousElementSibling;
+			if (btn) btn.setAttribute("aria-expanded", "false");
+		});
+	}
+	document.addEventListener("click", function(e) {
+		if (!e.target.closest(".kebab-wrap")) closeAllKebabMenus();
+	});
+	document.addEventListener("keydown", function(e) {
+		if (e.key === "Escape") closeAllKebabMenus();
+	});
+
 	function attachRowHandlers(container) {
 		container.querySelectorAll(".session-row").forEach(function(row) {
 			row.querySelectorAll("[data-action]").forEach(function(btn) {
-				btn.onclick = function() { handleSessionAction(row, btn.getAttribute("data-action")); };
+				btn.onclick = function() {
+					closeAllKebabMenus();
+					handleSessionAction(row, btn.getAttribute("data-action"));
+				};
 			});
+			var kebabBtn = row.querySelector(".kebab-btn");
+			if (kebabBtn) {
+				kebabBtn.onclick = function(e) {
+					e.stopPropagation();
+					var menu = kebabBtn.nextElementSibling;
+					var wasOpen = !menu.hidden;
+					closeAllKebabMenus();
+					menu.hidden = wasOpen;
+					kebabBtn.setAttribute("aria-expanded", wasOpen ? "false" : "true");
+				};
+			}
 		});
 		container.querySelectorAll(".row-select").forEach(function(cb) {
 			cb.onchange = function() {
@@ -813,8 +959,11 @@ function renderIndexPage(): string {
 			data.sessions.forEach(function(s) { liveKeys[rowKey(s)] = true; });
 			Object.keys(selectedKeys).forEach(function(key) { if (!liveKeys[key]) delete selectedKeys[key]; });
 
-			list.innerHTML = active.length === 0 ? '<span class="meta">No sessions yet</span>' : active.map(sessionRowHtml).join("");
-			attachRowHandlers(list);
+			// Already sorted pinned-first / last-accessed by the server; pagination just
+			// slices that order, so pinned sessions stay on page 1 and order is stable
+			// across pages.
+			lastActiveSessions = active;
+			renderPage();
 
 			archivedCount.textContent = archived.length;
 			archivedSection.style.display = archived.length === 0 ? "none" : "";
@@ -824,6 +973,33 @@ function renderIndexPage(): string {
 		} catch (_err) {
 			list.innerHTML = '<span class="meta error">Failed to load sessions</span>';
 		}
+	}
+
+	function renderPage() {
+		var list = document.getElementById("session-list");
+		var pagination = document.getElementById("pagination");
+		var totalPages = Math.max(1, Math.ceil(lastActiveSessions.length / PAGE_SIZE));
+		if (currentPage > totalPages) currentPage = totalPages;
+		if (currentPage < 1) currentPage = 1;
+		var start = (currentPage - 1) * PAGE_SIZE;
+		var pageItems = lastActiveSessions.slice(start, start + PAGE_SIZE);
+
+		list.innerHTML = pageItems.length === 0 ? '<span class="meta">No sessions yet</span>' : pageItems.map(sessionRowHtml).join("");
+		attachRowHandlers(list);
+
+		if (lastActiveSessions.length > PAGE_SIZE) {
+			pagination.style.display = "";
+			document.getElementById("page-indicator").textContent = "Page " + currentPage + " of " + totalPages + " (" + lastActiveSessions.length + ")";
+			document.getElementById("page-prev").disabled = currentPage <= 1;
+			document.getElementById("page-next").disabled = currentPage >= totalPages;
+		} else {
+			pagination.style.display = "none";
+		}
+	}
+
+	function changePage(delta) {
+		currentPage += delta;
+		renderPage();
 	}
 
 	async function handleSessionAction(row, action) {
@@ -1977,7 +2153,7 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 				return;
 			}
 			const relative = url.searchParams.get("path") ?? "";
-			const filePath = resolveSubagentArtifact(instance.cwd, relative);
+			const filePath = resolveSubagentArtifact(instance.cwd, instance.sessionFile, relative);
 			if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
 				sendText(response, 404, "Not found\n");
 				return;

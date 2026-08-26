@@ -57,14 +57,68 @@ body {
 	-webkit-font-smoothing: antialiased;
 }
 
+.app-shell {
+	display: flex;
+	height: 100dvh;
+}
+
 .app {
 	display: flex;
 	flex-direction: column;
 	height: 100dvh;
+	flex: 1;
+	min-width: 0;
 	max-width: 920px;
 	margin: 0 auto;
 	padding-left: env(safe-area-inset-left);
 	padding-right: env(safe-area-inset-right);
+}
+
+/* ============ Pinned sessions sidebar ============ */
+
+.pinned-sidebar {
+	width: 170px;
+	flex-shrink: 0;
+	overflow-y: auto;
+	border-right: 1px solid var(--pi-borderMuted);
+	padding: 10px 0;
+}
+
+.pinned-sidebar-title {
+	padding: 4px 12px 8px;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--pi-dim);
+}
+
+.pinned-sidebar-item {
+	display: block;
+	padding: 6px 12px;
+	font-size: 13px;
+	color: var(--pi-muted);
+	text-decoration: none;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.pinned-sidebar-item:hover {
+	background: var(--pi-bgHover);
+	color: var(--pi-fg);
+}
+
+.pinned-sidebar-item.current {
+	color: var(--pi-accent);
+	background: var(--pi-selectedBg);
+}
+
+/* Slim sidebar only; on narrow screens it would crowd the chat area, so it's
+   hidden rather than squeezed. */
+@media (max-width: 900px) {
+	.pinned-sidebar {
+		display: none;
+	}
 }
 
 /* ============ Header ============ */
