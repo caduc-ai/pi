@@ -536,7 +536,11 @@ function renderIndexPage(): string {
 		.session-list { min-height: 1.5em; }
 		.archived-section { margin-top: 1em; }
 		.archived-section summary { cursor: pointer; color: #999; font-size: 0.9em; padding: 0.4em 0; }
-		.row-select { margin-right: 4px; flex-shrink: 0; width: 18px; height: 18px; }
+		.row-select { margin-right: 4px; flex-shrink: 0; width: 18px; height: 18px; display: none; }
+		body.select-mode .row-select { display: inline-block; }
+		.sessions-header { display: flex; align-items: center; gap: 10px; margin-top: 1.5em; }
+		.sessions-header h2 { font-size: 1em; margin: 0; }
+		.sessions-header .row-btn { min-height: 28px; }
 		.bulk-toolbar { display: flex; align-items: center; gap: 8px; padding: 0.5em 0; border-bottom: 1px solid #2a2a2a; margin-bottom: 0.3em; font-size: 0.9em; }
 		.bulk-toolbar .row-btn { min-height: 30px; }
 		#cwd-suggest { position: relative; }
@@ -555,12 +559,16 @@ function renderIndexPage(): string {
 </head>
 <body>
 	<h1>pi</h1>
-	<h2 style="font-size:1em;margin-top:1.5em">Sessions</h2>
+	<div class="sessions-header">
+		<h2>Sessions</h2>
+		<button class="row-btn" id="select-mode-btn" onclick="toggleSelectMode()">Select</button>
+	</div>
 	<div class="bulk-toolbar" id="bulk-toolbar" style="display:none">
 		<span><span id="bulk-count">0</span> selected</span>
+		<button class="row-btn" onclick="selectAllSessions()">Select all</button>
 		<button class="row-btn" onclick="bulkArchive()">Archive</button>
 		<button class="row-btn danger" onclick="bulkDelete()">Delete</button>
-		<button class="row-btn" onclick="clearSelection()">Clear</button>
+		<button class="row-btn" onclick="toggleSelectMode()">Cancel</button>
 	</div>
 	<div id="session-list" class="session-list"><span class="meta">Loading...</span></div>
 	<details class="archived-section" id="archived-section" style="display:none">
@@ -665,16 +673,32 @@ function renderIndexPage(): string {
 		return "stopped";
 	}
 
-	// Bulk selection (archive/delete). Pin/unpin stays per-row only.
+	// Bulk selection (archive/delete). Pin/unpin stays per-row only. Checkboxes are
+	// hidden until the user enters select mode via the Select button.
 	var selectedKeys = {};
+	var selectMode = false;
 	function rowKey(s) { return s.id ? ("id:" + s.id) : ("path:" + s.sessionFile); }
 
 	function updateBulkToolbar() {
 		var toolbar = document.getElementById("bulk-toolbar");
 		var count = document.getElementById("bulk-count");
-		var n = Object.keys(selectedKeys).length;
-		count.textContent = n;
-		toolbar.style.display = n === 0 ? "none" : "";
+		count.textContent = Object.keys(selectedKeys).length;
+		toolbar.style.display = selectMode ? "" : "none";
+	}
+
+	function toggleSelectMode() {
+		selectMode = !selectMode;
+		document.body.classList.toggle("select-mode", selectMode);
+		document.getElementById("select-mode-btn").style.display = selectMode ? "none" : "";
+		if (!selectMode) clearSelection(); else updateBulkToolbar();
+	}
+
+	function selectAllSessions() {
+		document.querySelectorAll(".row-select").forEach(function(cb) {
+			cb.checked = true;
+			selectedKeys[cb.getAttribute("data-key")] = true;
+		});
+		updateBulkToolbar();
 	}
 
 	function clearSelection() {
