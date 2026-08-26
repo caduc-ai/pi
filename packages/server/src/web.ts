@@ -755,10 +755,11 @@ function renderIndexPage(): string {
 </head>
 <body>
 	<h1>pi</h1>
-	<div class="ns-bar" id="ns-bar">
-		<label for="ns-select">Namespace</label>
+	<div class="ns-bar" id="ns-bar" style="display:none">
+		<label for="ns-select" id="ns-label">Namespace</label>
 		<select id="ns-select" onchange="onNamespaceSwitch()"></select>
 		<button type="button" id="ns-delete-btn" onclick="deleteNamespacePrompt()">Delete namespace…</button>
+		<button type="button" class="select-trigger" id="ns-create-link" style="display:none" onclick="createFirstNamespace()">+ New namespace…</button>
 	</div>
 	<div class="dash-columns">
 	<div class="dash-main">
@@ -909,15 +910,18 @@ function renderIndexPage(): string {
 	}
 
 	function renderNamespaceSwitcher() {
-		// Only default namespace exists: hide the switcher bar entirely, matching
-		// the spawn-form select's behavior (renderSpawnNamespaceSelect), so a
-		// single-namespace user sees zero change from before namespaces existed.
+		// Only default namespace exists: collapse the bar to a single low-key
+		// "+ New namespace" link. Hiding it entirely (an earlier iteration) made
+		// creating the FIRST extra namespace impossible, since the switcher's own
+		// "+ New namespace" option and the spawn-form select were both hidden too.
 		var bar = document.getElementById("ns-bar");
-		if (allNamespaces.length <= 1) {
-			bar.style.display = "none";
-			return;
-		}
+		var onlyDefault = allNamespaces.length <= 1;
 		bar.style.display = "";
+		document.getElementById("ns-label").style.display = onlyDefault ? "none" : "";
+		document.getElementById("ns-select").style.display = onlyDefault ? "none" : "";
+		document.getElementById("ns-delete-btn").style.display = onlyDefault ? "none" : "";
+		document.getElementById("ns-create-link").style.display = onlyDefault ? "" : "none";
+		if (onlyDefault) return;
 		var sel = document.getElementById("ns-select");
 		var options = ["all"].concat(allNamespaces);
 		sel.innerHTML = options.map(function(n) {
@@ -948,6 +952,18 @@ function renderIndexPage(): string {
 		} catch (error) {
 			window.alert("Failed to delete namespace: " + error.message);
 		}
+	}
+
+	function createFirstNamespace() {
+		createNamespacePrompt(function(name) {
+			if (name) {
+				currentNamespace = name;
+				localStorage.setItem("pi-dashboard-namespace", currentNamespace);
+			}
+			renderNamespaceSwitcher();
+			renderSpawnNamespaceSelect();
+			if (name) loadSessions();
+		});
 	}
 
 	function onNamespaceSwitch() {
