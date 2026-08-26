@@ -11,6 +11,7 @@ import {
 	type RpcResponse,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
+import { normalizeNamespace, resolveRequestNamespace, storedNamespaceValue } from "./namespaces.ts";
 import { radiusPresence } from "./radius.ts";
 import { createRpcProcessInstance, type RpcProcessInstance } from "./rpc-process.ts";
 import { getInstance, loadInstances, removeInstance, saveInstances, upsertInstance } from "./storage.ts";
@@ -476,8 +477,14 @@ export class ServerSupervisor {
 		return stored ? cloneInstance(stored) : undefined;
 	}
 
-	async spawnInstance(options: { cwd: string; label?: string; sessionFile?: string }): Promise<InstanceRecord> {
+	async spawnInstance(options: {
+		cwd: string;
+		label?: string;
+		sessionFile?: string;
+		namespace?: string;
+	}): Promise<InstanceRecord> {
 		const now = new Date().toISOString();
+		const namespace = storedNamespaceValue(normalizeNamespace(options.namespace));
 		const live: LiveInstance = {
 			record: {
 				id: randomUUID(),
@@ -486,6 +493,7 @@ export class ServerSupervisor {
 				createdAt: now,
 				lastSeenAt: now,
 				label: options.label,
+				namespace,
 			},
 			resources: {},
 			subscribers: new Set(),
@@ -496,7 +504,11 @@ export class ServerSupervisor {
 		upsertInstance(live.record);
 
 		try {
-			const rpcProcess = createRpcProcessInstance({ cwd: options.cwd, sessionFile: options.sessionFile });
+			const rpcProcess = createRpcProcessInstance({
+				cwd: options.cwd,
+				sessionFile: options.sessionFile,
+				namespace,
+			});
 			this.bindRpcChannel(live, rpcProcess);
 			await this.syncInstanceRecord(live);
 			const registeredRecord = await radiusPresence.registerPi(live.record);
@@ -579,7 +591,12 @@ export class ServerSupervisor {
 	 * only by scanning session files on disk). Lets rename/pin/archive/delete
 	 * address such sessions the same way as a tracked instance.
 	 */
-	ensureRecordForSessionFile(sessionFile: string, cwd: string, sessionName?: string): InstanceRecord {
+	ensureRecordForSessionFile(
+		sessionFile: string,
+		cwd: string,
+		sessionName?: string,
+		namespace?: string,
+	): InstanceRecord {
 		const existing = loadInstances().find((record) => record.sessionFile === sessionFile);
 		if (existing) {
 			return existing;
@@ -593,6 +610,7 @@ export class ServerSupervisor {
 			lastSeenAt: now,
 			sessionFile,
 			sessionName,
+			namespace: storedNamespaceValue(normalizeNamespace(namespace)),
 		};
 		upsertInstance(created);
 		return created;
@@ -680,6 +698,7 @@ export class ServerSupervisor {
 					cwd: updated.cwd,
 					label: updated.label,
 					sessionFile: updated.sessionFile,
+					namespace: updated.namespace,
 				});
 				const spawnedLive = this.liveInstances.get(spawned.id);
 				if (spawnedLive) {
@@ -739,6 +758,83 @@ export class ServerSupervisor {
 	}
 
 	/**
+	 * Move a session to another namespace: the session FILE stays exactly where
+	 * it is, only which PI_CODING_AGENT_DIR (credentials/settings) a live child
+	 * uses changes. A live instance is stopped and, if it has a sessionFile,
+	 * respawned (resumed) under the new namespace's env - the same session file
+	 * continuing under different provider credentials. A stopped instance just
+	 * has its record updated; the next spawn/resume picks up the new namespace.
+	 */
+	async moveInstanceNamespace(
+		instanceId: string,
+		namespaceRaw: string | undefined,
+	): Promise<{ ok: true; instance: InstanceRecord } | { ok: false; error: string }> {
+		const resolved = resolveRequestNamespace(namespaceRaw);
+		if (!resolved.ok) {
+			return resolved;
+		}
+		const target = resolved.namespace;
+		const namespace = storedNamespaceValue(target);
+
+		const live = this.liveInstances.get(instanceId);
+		const current = live ? live.record : getInstance(instanceId);
+		if (!current) {
+			return { ok: false, error: "Unknown instance" };
+		}
+		if (normalizeNamespace(current.namespace) === target) {
+			return { ok: true, instance: cloneInstance(current) };
+		}
+
+		if (live) {
+			const wasPinned = live.record.pinned;
+			const { cwd, label, sessionFile } = live.record;
+			await this.cleanupAcquiredResources(live);
+			this.liveInstances.delete(instanceId);
+			live.record = {
+				...live.record,
+				status: "stopped",
+				namespace,
+				lastSeenAt: new Date().toISOString(),
+			};
+			upsertInstance(live.record);
+			if (!sessionFile) {
+				return { ok: true, instance: cloneInstance(live.record) };
+			}
+			// spawnInstance below upserts its own new InstanceRecord as soon as it starts,
+			// before the failure that can trigger failSpawn; if it throws, that record is
+			// stray (the original record above, already updated to "stopped" + the new
+			// namespace, is what should remain as the single record for this session
+			// file). Diff instance ids before/after to find and remove it, rather than
+			// relying on failSpawn (which only clears the in-memory live entry, not the
+			// persisted record).
+			const idsBeforeRespawn = new Set(loadInstances().map((instance) => instance.id));
+			try {
+				const spawned = await this.spawnInstance({ cwd, label, sessionFile, namespace });
+				const spawnedLive = this.liveInstances.get(spawned.id);
+				if (spawnedLive && wasPinned) {
+					this.updateRecord(spawnedLive, { pinned: true, archived: false });
+				}
+				removeInstance(live.record.id);
+				return { ok: true, instance: spawnedLive ? cloneInstance(spawnedLive.record) : spawned };
+			} catch (error) {
+				for (const instance of loadInstances()) {
+					if (instance.id !== live.record.id && !idsBeforeRespawn.has(instance.id)) {
+						removeInstance(instance.id);
+					}
+				}
+				return {
+					ok: false,
+					error: `Namespace updated but restart failed: ${error instanceof Error ? error.message : String(error)}`,
+				};
+			}
+		}
+
+		const updated: InstanceRecord = { ...current, namespace, lastSeenAt: new Date().toISOString() };
+		upsertInstance(updated);
+		return { ok: true, instance: updated };
+	}
+
+	/**
 	 * Delete a session entirely: stop it if live, remove its persisted record,
 	 * and delete its session .jsonl file from disk. Sessions are stored as flat
 	 * files in a per-cwd directory shared by every session for that cwd (see
@@ -795,6 +891,7 @@ export class ServerSupervisor {
 					cwd: record.cwd,
 					label: record.label,
 					sessionFile: record.sessionFile,
+					namespace: record.namespace,
 				});
 				const live = this.liveInstances.get(spawned.id);
 				if (live) {
@@ -842,6 +939,7 @@ export class ServerSupervisor {
 				cwd: record.cwd,
 				label: record.label,
 				sessionFile: record.sessionFile,
+				namespace: record.namespace,
 			});
 			const live = this.liveInstances.get(spawned.id);
 			if (live) {

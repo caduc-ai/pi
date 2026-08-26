@@ -33,9 +33,10 @@ export function PinnedSidebar() {
 					key={session.id}
 					href={`/i/${session.id}/`}
 					class={`pinned-sidebar-item${session.id === instanceId ? " current" : ""}`}
-					title={session.name}
+					title={session.namespace ? `${session.name} (${session.namespace})` : session.name}
 				>
 					{session.name}
+					{session.namespace ? <span class="pinned-sidebar-item-ns">{session.namespace}</span> : null}
 				</a>
 			))}
 		</nav>

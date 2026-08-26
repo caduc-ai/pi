@@ -1710,7 +1710,20 @@ export class SessionManager {
 			typeof sessionDirOrOnProgress === "string" ? normalizePath(sessionDirOrOnProgress) : undefined;
 		const progress = typeof sessionDirOrOnProgress === "function" ? sessionDirOrOnProgress : onProgress;
 		if (customSessionDir) {
+			// Mirror the default branch below: session files live one level down in
+			// per-cwd subdirectories (plus any flat legacy files in the dir itself).
 			const sessions = await listSessionsFromDir(customSessionDir, progress);
+			try {
+				if (existsSync(customSessionDir)) {
+					const entries = await readdir(customSessionDir, { withFileTypes: true });
+					for (const entry of entries) {
+						if (!entry.isDirectory()) continue;
+						sessions.push(...(await listSessionsFromDir(join(customSessionDir, entry.name))));
+					}
+				}
+			} catch {
+				// Unreadable subdirectories are skipped; flat results still apply.
+			}
 			sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 			return sessions;
 		}

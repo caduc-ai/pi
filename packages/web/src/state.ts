@@ -717,9 +717,20 @@ export interface PinnedSessionSummary {
 	id: string;
 	name: string;
 	status: string;
+	// Account namespace (pi-server concept, see packages/server/src/namespaces.ts);
+	// undefined means the implicit default namespace.
+	namespace?: string;
 }
 
 export const pinnedSessions = signal<PinnedSessionSummary[]>([]);
+
+/**
+ * This session's own account namespace (pi-server concept), found by matching
+ * instanceId in the same /api/dashboard-sessions response used for the pinned
+ * sidebar below. undefined under bare `pi --web` (no dashboard-sessions API)
+ * or the implicit default namespace.
+ */
+export const currentNamespace = signal<string | undefined>(undefined);
 
 /**
  * Pinned + live sessions for the in-session sidebar quick-switcher. Pinning is a
@@ -736,15 +747,21 @@ export async function refreshPinnedSessions(): Promise<void> {
 		if (!res.ok) return;
 		const data = (await res.json()) as {
 			ok: boolean;
-			sessions?: Array<{ id?: string; name: string; status: string; pinned: boolean }>;
+			sessions?: Array<{ id?: string; name: string; status: string; pinned: boolean; namespace?: string }>;
 		};
 		if (!data.ok || !data.sessions) return;
 		pinnedSessions.value = data.sessions
 			.filter(
-				(session): session is { id: string; name: string; status: string; pinned: boolean } =>
+				(session): session is { id: string; name: string; status: string; pinned: boolean; namespace?: string } =>
 					Boolean(session.id) && session.pinned && (session.status === "online" || session.status === "starting"),
 			)
-			.map((session) => ({ id: session.id, name: session.name, status: session.status }));
+			.map((session) => ({
+				id: session.id,
+				name: session.name,
+				status: session.status,
+				namespace: session.namespace,
+			}));
+		currentNamespace.value = data.sessions.find((session) => session.id === instanceId)?.namespace;
 	} catch {
 		// Best-effort: the sidebar keeps its last-known list (or stays empty) on failure.
 	}

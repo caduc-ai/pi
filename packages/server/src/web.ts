@@ -11,11 +11,15 @@
  * - GET /i/<id>/subagents/file?path=<rel>  a subagent transcript/output artifact
  * - GET /review               cranium code review UI
  * - GET /themes, /theme/*     TUI theme files, shared by all instances
- * - GET  /api/dashboard-sessions       merged live/stopped/past session list (dashboard)
+ * - GET  /api/dashboard-sessions       merged live/stopped/past session list (dashboard), tagged by namespace
  * - POST /api/sessions/rename          rename a session (by instance id or session file path)
  * - POST /api/sessions/pin             pin/unpin a session ("always up")
  * - POST /api/sessions/archive         archive/unarchive a session
  * - POST /api/sessions/delete          stop (if live), forget, and delete a session's file
+ * - POST /api/sessions/move            move a session to another namespace (session file stays put)
+ * - GET  /api/namespaces               list account namespaces (always includes "default")
+ * - POST /api/namespaces               create a namespace: { name }
+ * - POST /api/namespaces/delete        remove an empty namespace from the registry
  * - GET  /api/fs/dirs?prefix=<path>    directory-only path completions for the spawn form
  */
 
@@ -34,6 +38,14 @@ import {
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { WebSocketServer } from "ws";
+import { getNamespaceAgentDir } from "./config.ts";
+import {
+	createNamespace,
+	DEFAULT_NAMESPACE,
+	deleteNamespace,
+	listNamespaces,
+	resolveRequestNamespace,
+} from "./namespaces.ts";
 import { supervisor } from "./supervisor.ts";
 import type { InstanceRecord } from "./types.ts";
 
@@ -444,6 +456,9 @@ interface DashboardSessionSummary {
 	status: DashboardSessionStatus;
 	pinned: boolean;
 	archived: boolean;
+	// Account namespace this session belongs to; undefined means the implicit
+	// "default" namespace. See namespaces.ts.
+	namespace?: string;
 	messageCount?: number;
 	modified?: string;
 }
@@ -468,22 +483,41 @@ async function listDashboardSessions(): Promise<DashboardSessionSummary[]> {
 		status: instance.status,
 		pinned: Boolean(instance.pinned),
 		archived: Boolean(instance.archived),
+		namespace: instance.namespace,
 		modified: instance.lastSeenAt ?? instance.createdAt,
 	}));
 
-	const pastSessions = await SessionManager.listAll();
-	const pastSummaries: DashboardSessionSummary[] = pastSessions
-		.filter((session) => !trackedSessionFiles.has(session.path))
-		.map((session) => ({
-			sessionFile: session.path,
-			cwd: session.cwd,
-			name: session.name?.trim() || session.firstMessage || session.id.slice(0, 8),
-			status: "past" as const,
-			pinned: false,
-			archived: false,
-			messageCount: session.messageCount,
-			modified: session.modified instanceof Date ? session.modified.toISOString() : String(session.modified),
-		}));
+	// Past sessions (no InstanceRecord) are scanned per namespace: the default
+	// namespace's sessions live under the normal ~/.pi/agent/sessions, and each
+	// named namespace has its own tree under its own agent dir. See namespaces.ts.
+	const namespaceSessionDirs: Array<{ namespace: string | undefined; sessionDir: string | undefined }> = [
+		{ namespace: undefined, sessionDir: undefined },
+		...listNamespaces()
+			.filter((namespace) => namespace.name !== DEFAULT_NAMESPACE)
+			.map((namespace) => ({
+				namespace: namespace.name,
+				sessionDir: path.join(getNamespaceAgentDir(namespace.name), "sessions"),
+			})),
+	];
+
+	const pastSummaries: DashboardSessionSummary[] = [];
+	for (const { namespace, sessionDir } of namespaceSessionDirs) {
+		const pastSessions = await SessionManager.listAll(sessionDir);
+		for (const session of pastSessions) {
+			if (trackedSessionFiles.has(session.path)) continue;
+			pastSummaries.push({
+				sessionFile: session.path,
+				cwd: session.cwd,
+				name: session.name?.trim() || session.firstMessage || session.id.slice(0, 8),
+				status: "past",
+				pinned: false,
+				archived: false,
+				namespace,
+				messageCount: session.messageCount,
+				modified: session.modified instanceof Date ? session.modified.toISOString() : String(session.modified),
+			});
+		}
+	}
 
 	// Pinned sessions always sort first (as a group ordered by last-accessed, same
 	// as everyone else); status otherwise plays no role in ordering.
@@ -496,11 +530,51 @@ async function listDashboardSessions(): Promise<DashboardSessionSummary[]> {
 	return merged;
 }
 
-/** Session .jsonl files live under a per-cwd directory below the agent dir; reject anything else. */
+/**
+ * Resolve the instance id a session action (rename/pin/archive/move) targets:
+ * the tracked instance id directly, or - for a past session with no
+ * InstanceRecord yet - a record created for its session file path. The
+ * namespace is only validated (via resolveRequestNamespace) when it is
+ * actually going to be used, i.e. when creating that record; it must never
+ * reach ensureRecordForSessionFile (and from there spawnInstance ->
+ * getNamespaceAgentDir) unvalidated.
+ */
+function resolveSessionActionInstanceId(parsed: {
+	id?: string;
+	path?: string;
+	cwd?: string;
+	namespace?: string;
+}): { ok: true; instanceId: string } | { ok: false; error: string } {
+	if (parsed.id) {
+		return { ok: true, instanceId: parsed.id };
+	}
+	if (!parsed.path) {
+		return { ok: false, error: "Missing id or path" };
+	}
+	const namespaceResult = resolveRequestNamespace(parsed.namespace);
+	if (!namespaceResult.ok) {
+		return namespaceResult;
+	}
+	const instanceId = supervisor.ensureRecordForSessionFile(
+		parsed.path,
+		parsed.cwd ?? path.dirname(parsed.path),
+		undefined,
+		namespaceResult.namespace,
+	).id;
+	return { ok: true, instanceId };
+}
+
+/** Session .jsonl files live under a per-cwd directory below an agent dir (default or a namespace's); reject anything else. */
 function isSafeSessionFilePath(candidate: string): boolean {
-	const sessionsRoot = path.join(getAgentDir(), "sessions");
 	const resolved = path.resolve(candidate);
-	return resolved.endsWith(".jsonl") && (resolved === sessionsRoot || resolved.startsWith(sessionsRoot + path.sep));
+	if (!resolved.endsWith(".jsonl")) return false;
+	const roots = [
+		path.join(getAgentDir(), "sessions"),
+		...listNamespaces()
+			.filter((namespace) => namespace.name !== DEFAULT_NAMESPACE)
+			.map((namespace) => path.join(getNamespaceAgentDir(namespace.name), "sessions")),
+	];
+	return roots.some((root) => resolved === root || resolved.startsWith(root + path.sep));
 }
 
 const MAX_DIR_COMPLETIONS = 20;
@@ -580,11 +654,17 @@ function renderIndexPage(): string {
 		.spawn-form { margin-top: 2em; padding: 0.9em 1em 1em; border: 1px solid #2a2a2a; border-radius: 6px; background: #121212; }
 		.spawn-form h2 { font-size: 0.95em; margin: 0 0 0.7em; }
 		.spawn-form label { display: block; margin: 0; font-size: 0.8em; color: #888; }
-		.spawn-form input[type="text"], .spawn-form button { font-family: inherit; font-size: 13px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #3a3a3a; padding: 7px 9px; border-radius: 4px; }
-		.spawn-form input[type="text"] { width: 100%; margin-top: 4px; }
+		.spawn-form input[type="text"], .spawn-form select, .spawn-form button { font-family: inherit; font-size: 13px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #3a3a3a; padding: 7px 9px; border-radius: 4px; }
+		.spawn-form input[type="text"], .spawn-form select { width: 100%; margin-top: 4px; }
 		.spawn-form input[type="text"]::placeholder { color: #555; }
 		.spawn-form button { cursor: pointer; background: #2a4a3f; border-color: #3a6a5f; padding: 7px 16px; }
 		.spawn-actions { display: flex; align-items: center; gap: 12px; margin-top: 0.7em; }
+		#spawn-namespace-wrap { margin-top: 0.7em; }
+		.ns-bar { display: flex; align-items: center; gap: 8px; margin: -0.5em 0 1.2em; font-size: 0.85em; color: #999; }
+		.ns-bar select { font-family: inherit; font-size: 0.85em; background: #1a1a1a; color: #e6e6e6; border: 1px solid #3a3a3a; padding: 4px 8px; border-radius: 4px; }
+		.ns-bar button { font-family: inherit; font-size: 0.85em; background: #1a1a1a; color: #e6e6e6; border: 1px solid #3a3a3a; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
+		.ns-bar button:disabled { opacity: 0.4; cursor: default; }
+		.ns-tag { color: #b294bb; border-color: #3a2a4a; }
 		.spawn-form button:hover { background: #3a6a5f; }
 		.spawn-result { margin-top: 0.5em; font-size: 0.8em; }
 		.spawn-result.error { color: #e06060; }
@@ -675,6 +755,11 @@ function renderIndexPage(): string {
 </head>
 <body>
 	<h1>pi</h1>
+	<div class="ns-bar" id="ns-bar">
+		<label for="ns-select">Namespace</label>
+		<select id="ns-select" onchange="onNamespaceSwitch()"></select>
+		<button type="button" id="ns-delete-btn" onclick="deleteNamespacePrompt()">Delete namespace…</button>
+	</div>
 	<div class="dash-columns">
 	<div class="dash-main">
 	<div class="sessions-header">
@@ -702,6 +787,9 @@ function renderIndexPage(): string {
 					<input type="text" name="cwd" id="spawn-cwd" placeholder="/path/to/project" autocomplete="off" required/>
 					<div class="suggest-list" id="cwd-suggest-list" style="display:none"></div>
 				</div>
+			</label>
+			<label id="spawn-namespace-wrap" style="display:none">Namespace<br>
+				<select name="namespace" id="spawn-namespace"></select>
 			</label>
 			<div class="spawn-actions">
 				<button type="submit">Spawn</button>
@@ -774,10 +862,15 @@ function renderIndexPage(): string {
 			resultEl.textContent = "Spawning…";
 			resultEl.className = "spawn-result";
 			try {
+				const namespaceSelect = document.getElementById("spawn-namespace");
 				const res = await fetch("/api/spawn", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ cwd: cwdValue, createDir: formData.get("mkdir") === "on" }),
+					body: JSON.stringify({
+						cwd: cwdValue,
+						createDir: formData.get("mkdir") === "on",
+						namespace: namespaceSelect ? namespaceSelect.value : undefined,
+					}),
 				});
 				const data = await res.json();
 				if (data.ok && data.instance) {
@@ -794,6 +887,135 @@ function renderIndexPage(): string {
 			}
 		}
 	function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+	// Account namespaces (see namespaces.ts): separate provider credentials +
+	// sessions per local "account". "all" is a client-side filter value, never
+	// sent to the server. Selection persists in localStorage across reloads.
+	var allNamespaces = ["default"];
+	var currentNamespace = localStorage.getItem("pi-dashboard-namespace") || "all";
+
+	async function loadNamespaces() {
+		try {
+			var res = await fetch("/api/namespaces");
+			var data = await res.json();
+			if (data.ok && Array.isArray(data.namespaces)) {
+				allNamespaces = data.namespaces.map(function(n) { return n.name; });
+			}
+		} catch (_err) {
+			// Best-effort: fall back to just "default".
+		}
+		renderNamespaceSwitcher();
+		renderSpawnNamespaceSelect();
+	}
+
+	function renderNamespaceSwitcher() {
+		// Only default namespace exists: hide the switcher bar entirely, matching
+		// the spawn-form select's behavior (renderSpawnNamespaceSelect), so a
+		// single-namespace user sees zero change from before namespaces existed.
+		var bar = document.getElementById("ns-bar");
+		if (allNamespaces.length <= 1) {
+			bar.style.display = "none";
+			return;
+		}
+		bar.style.display = "";
+		var sel = document.getElementById("ns-select");
+		var options = ["all"].concat(allNamespaces);
+		sel.innerHTML = options.map(function(n) {
+			return '<option value="' + esc(n) + '"' + (n === currentNamespace ? " selected" : "") + '>' + (n === "all" ? "All namespaces" : esc(n)) + '</option>';
+		}).join("") + '<option value="__new__">+ New namespace\u2026</option>';
+		var deleteBtn = document.getElementById("ns-delete-btn");
+		deleteBtn.disabled = currentNamespace === "all" || currentNamespace === "default";
+	}
+
+	async function deleteNamespacePrompt() {
+		if (currentNamespace === "all" || currentNamespace === "default") return;
+		var name = currentNamespace;
+		if (!window.confirm('Delete namespace "' + name + '"? This only removes it from the switcher; it never touches its credentials or session files.')) return;
+		try {
+			var res = await fetch("/api/namespaces/delete", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name: name }),
+			});
+			var data = await res.json();
+			if (!data.ok) { window.alert("Failed to delete namespace: " + (data.error || "unknown")); return; }
+			allNamespaces = allNamespaces.filter(function(n) { return n !== name; });
+			currentNamespace = "all";
+			localStorage.setItem("pi-dashboard-namespace", currentNamespace);
+			renderNamespaceSwitcher();
+			renderSpawnNamespaceSelect();
+			loadSessions();
+		} catch (error) {
+			window.alert("Failed to delete namespace: " + error.message);
+		}
+	}
+
+	function onNamespaceSwitch() {
+		var sel = document.getElementById("ns-select");
+		var value = sel.value;
+		if (value === "__new__") {
+			createNamespacePrompt(function(name) {
+				if (name) currentNamespace = name;
+				renderNamespaceSwitcher();
+				renderSpawnNamespaceSelect();
+				if (name) { localStorage.setItem("pi-dashboard-namespace", currentNamespace); loadSessions(); }
+			});
+			return;
+		}
+		currentNamespace = value;
+		localStorage.setItem("pi-dashboard-namespace", currentNamespace);
+		renderSpawnNamespaceSelect();
+		loadSessions();
+	}
+
+	async function createNamespacePrompt(cb) {
+		var name = window.prompt("New namespace name (lowercase letters, digits, - or _, max 32 chars):");
+		if (name === null) { cb(null); return; }
+		name = name.trim();
+		if (!name) { cb(null); return; }
+		try {
+			var res = await fetch("/api/namespaces", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name: name }),
+			});
+			var data = await res.json();
+			if (!data.ok) { window.alert("Failed to create namespace: " + (data.error || "unknown")); cb(null); return; }
+			if (allNamespaces.indexOf(name) === -1) allNamespaces.push(name);
+			cb(name);
+		} catch (error) {
+			window.alert("Failed to create namespace: " + error.message);
+			cb(null);
+		}
+	}
+
+	function renderSpawnNamespaceSelect() {
+		var wrap = document.getElementById("spawn-namespace-wrap");
+		var sel = document.getElementById("spawn-namespace");
+		if (allNamespaces.length <= 1) {
+			wrap.style.display = "none";
+			sel.innerHTML = '<option value="default">default</option>';
+			return;
+		}
+		wrap.style.display = "";
+		var current = currentNamespace === "all" ? "default" : currentNamespace;
+		sel.innerHTML = allNamespaces.map(function(n) {
+			return '<option value="' + esc(n) + '"' + (n === current ? " selected" : "") + '>' + esc(n) + '</option>';
+		}).join("") + '<option value="__new__">+ New namespace\u2026</option>';
+	}
+
+	document.getElementById("spawn-namespace").addEventListener("change", function() {
+		var sel = this;
+		if (sel.value !== "__new__") return;
+		createNamespacePrompt(function(name) {
+			if (!name) { renderSpawnNamespaceSelect(); return; }
+			var opt = document.createElement("option");
+			opt.value = name;
+			opt.textContent = name;
+			sel.insertBefore(opt, sel.lastElementChild);
+			sel.value = name;
+		});
+	});
 
 	// Working-directory autocomplete: a small debounced dropdown backed by
 	// GET /api/fs/dirs, since <datalist> styling/behavior is inconsistent across
@@ -994,6 +1216,9 @@ function renderIndexPage(): string {
 	function sessionRowHtml(s) {
 		var isLive = s.status === "online" || s.status === "starting";
 		var badge = '<span class="badge badge-' + statusLabel(s) + '">' + statusLabel(s) + '</span>';
+		var namespace = s.namespace || "default";
+		// Only tagged when non-default: default is the implicit, unlabeled namespace.
+		var nsTag = namespace !== "default" ? '<span class="badge ns-tag">' + esc(namespace) + '</span>' : "";
 		// Pinned is shown as an icon in front of the name rather than yet another text badge.
 		var pinIcon = s.pinned
 			? '<span class="pin-icon" title="Pinned"><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M9.5 1.5l5 5-1.2 1.2-.9-.3-2.6 2.6.3 2.4-1.2 1.2-2.6-2.6-3.8 3.8-.7-.7 3.8-3.8L3 7.7l1.2-1.2 2.4.3 2.6-2.6-.3-.9 1.2-1.2z"/></svg></span>'
@@ -1004,12 +1229,13 @@ function renderIndexPage(): string {
 		var key = rowKey(s);
 		var checked = selectedKeys[key] ? " checked" : "";
 		return '' +
-			'<div class="session-row" data-id="' + esc(s.id || "") + '" data-path="' + esc(s.sessionFile || "") + '" data-cwd="' + esc(s.cwd || "") + '" data-pinned="' + (s.pinned ? "true" : "false") + '" data-archived="' + (s.archived ? "true" : "false") + '">' +
+			'<div class="session-row" data-id="' + esc(s.id || "") + '" data-path="' + esc(s.sessionFile || "") + '" data-cwd="' + esc(s.cwd || "") + '" data-pinned="' + (s.pinned ? "true" : "false") + '" data-archived="' + (s.archived ? "true" : "false") + '" data-namespace="' + esc(namespace) + '">' +
 				'<input type="checkbox" class="row-select" data-key="' + esc(key) + '"' + checked + ' />' +
 				'<div class="session-main">' +
 					pinIcon +
 					'<span class="session-name" data-role="name">' + esc(s.name) + '</span>' +
 					badge +
+					nsTag +
 					'<span class="meta">' + esc(s.cwd) + '</span>' +
 				'</div>' +
 				'<div class="session-actions">' +
@@ -1020,6 +1246,7 @@ function renderIndexPage(): string {
 							'<button type="button" data-action="rename">Rename</button>' +
 							'<button type="button" data-action="pin">' + (s.pinned ? "Unpin" : "Pin") + '</button>' +
 							'<button type="button" data-action="archive">' + (s.archived ? "Unarchive" : "Archive") + '</button>' +
+							'<button type="button" data-action="move">Move to namespace\u2026</button>' +
 							'<button type="button" class="danger" data-action="delete">Delete</button>' +
 						'</div>' +
 					'</div>' +
@@ -1097,6 +1324,10 @@ function renderIndexPage(): string {
 				list.innerHTML = '<span class="meta error">Failed to load sessions</span>';
 				return;
 			}
+			var allSessions = currentNamespace === "all"
+				? data.sessions
+				: data.sessions.filter(function(s) { return (s.namespace || "default") === currentNamespace; });
+			data = { ok: true, sessions: allSessions };
 			var archived = data.sessions.filter(function(s) { return s.archived; });
 			// Two sections: live and pinned sessions always visible up top, everything
 			// else ("Other sessions") below, paginated. Server order (pinned-first,
@@ -1169,6 +1400,7 @@ function renderIndexPage(): string {
 		var cwd = row.getAttribute("data-cwd") || undefined;
 		var pinned = row.getAttribute("data-pinned") === "true";
 		var archived = row.getAttribute("data-archived") === "true";
+		var namespace = row.getAttribute("data-namespace") || "default";
 		var resultEl = document.getElementById("spawn-result");
 
 		if (action === "resume") {
@@ -1177,7 +1409,7 @@ function renderIndexPage(): string {
 				var res = await fetch("/api/spawn", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ cwd: cwd, sessionFile: sessionPath }),
+					body: JSON.stringify({ cwd: cwd, sessionFile: sessionPath, namespace: namespace }),
 				});
 				var data = await res.json();
 				if (data.ok && data.instance) {
@@ -1199,7 +1431,7 @@ function renderIndexPage(): string {
 			var res = await fetch("/api/sessions/rename", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, name: newName }),
+				body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, name: newName, namespace: namespace }),
 			});
 			var data = await res.json();
 			if (!data.ok) window.alert("Rename failed: " + (data.error || "unknown"));
@@ -1211,7 +1443,7 @@ function renderIndexPage(): string {
 			var res = await fetch("/api/sessions/pin", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, pinned: !pinned }),
+				body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, pinned: !pinned, namespace: namespace }),
 			});
 			var data = await res.json();
 			if (!data.ok) window.alert("Pin failed: " + (data.error || "unknown"));
@@ -1223,10 +1455,27 @@ function renderIndexPage(): string {
 			var res = await fetch("/api/sessions/archive", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, archived: !archived }),
+				body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, archived: !archived, namespace: namespace }),
 			});
 			var data = await res.json();
 			if (!data.ok) window.alert("Archive failed: " + (data.error || "unknown"));
+			loadSessions();
+			return;
+		}
+
+		if (action === "move") {
+			var known = allNamespaces.join(", ");
+			var target = window.prompt("Move to namespace (existing: " + known + "):", namespace);
+			if (target === null) return;
+			target = target.trim();
+			if (!target || target === namespace) return;
+			var res = await fetch("/api/sessions/move", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, namespace: target, fromNamespace: namespace }),
+			});
+			var data = await res.json();
+			if (!data.ok) window.alert("Move failed: " + (data.error || "unknown"));
 			loadSessions();
 			return;
 		}
@@ -1246,6 +1495,7 @@ function renderIndexPage(): string {
 		}
 	}
 
+	loadNamespaces();
 	loadSessions();
 	</script>
 </body>
@@ -2037,6 +2287,7 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 							label?: string;
 							sessionFile?: string;
 							createDir?: boolean;
+							namespace?: string;
 						};
 						const cwd = parsed.cwd?.trim();
 						// Resumes carry a sessionFile (with the stored cwd); fresh spawns must
@@ -2046,6 +2297,13 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 							response.end(JSON.stringify({ ok: false, error: "cwd is required" }));
 							return;
 						}
+						const namespaceResult = resolveRequestNamespace(parsed.namespace);
+						if (!namespaceResult.ok) {
+							response.writeHead(400, { "content-type": "application/json" });
+							response.end(JSON.stringify(namespaceResult));
+							return;
+						}
+						const namespace = namespaceResult.namespace;
 						if (!fs.existsSync(cwd)) {
 							if (parsed.createDir) {
 								fs.mkdirSync(cwd, { recursive: true });
@@ -2068,6 +2326,7 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 							cwd,
 							label: parsed.label,
 							sessionFile: parsed.sessionFile,
+							namespace,
 						});
 						response.writeHead(200, { "content-type": "application/json" });
 						response.end(
@@ -2078,6 +2337,7 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 									status: instance.status,
 									cwd: instance.cwd,
 									label: instance.label,
+									namespace: instance.namespace,
 								},
 							}),
 						);
@@ -2180,23 +2440,25 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			request.on("end", () => {
 				void (async () => {
 					try {
-						const parsed = JSON.parse(body) as { id?: string; path?: string; cwd?: string; name?: string };
+						const parsed = JSON.parse(body) as {
+							id?: string;
+							path?: string;
+							cwd?: string;
+							name?: string;
+							namespace?: string;
+						};
 						if (!parsed.name || !parsed.name.trim()) {
 							response.writeHead(200, { "content-type": "application/json" });
 							response.end(JSON.stringify({ ok: false, error: "Name is required" }));
 							return;
 						}
-						const instanceId =
-							parsed.id ??
-							(parsed.path
-								? supervisor.ensureRecordForSessionFile(parsed.path, parsed.cwd ?? path.dirname(parsed.path)).id
-								: undefined);
-						if (!instanceId) {
+						const instanceIdResult = resolveSessionActionInstanceId(parsed);
+						if (!instanceIdResult.ok) {
 							response.writeHead(200, { "content-type": "application/json" });
-							response.end(JSON.stringify({ ok: false, error: "Missing id or path" }));
+							response.end(JSON.stringify(instanceIdResult));
 							return;
 						}
-						const result = await supervisor.renameInstance(instanceId, parsed.name);
+						const result = await supervisor.renameInstance(instanceIdResult.instanceId, parsed.name);
 						response.writeHead(200, { "content-type": "application/json" });
 						response.end(JSON.stringify(result));
 					} catch (error: unknown) {
@@ -2218,18 +2480,20 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			request.on("end", () => {
 				void (async () => {
 					try {
-						const parsed = JSON.parse(body) as { id?: string; path?: string; cwd?: string; pinned?: boolean };
-						const instanceId =
-							parsed.id ??
-							(parsed.path
-								? supervisor.ensureRecordForSessionFile(parsed.path, parsed.cwd ?? path.dirname(parsed.path)).id
-								: undefined);
-						if (!instanceId) {
+						const parsed = JSON.parse(body) as {
+							id?: string;
+							path?: string;
+							cwd?: string;
+							pinned?: boolean;
+							namespace?: string;
+						};
+						const instanceIdResult = resolveSessionActionInstanceId(parsed);
+						if (!instanceIdResult.ok) {
 							response.writeHead(200, { "content-type": "application/json" });
-							response.end(JSON.stringify({ ok: false, error: "Missing id or path" }));
+							response.end(JSON.stringify(instanceIdResult));
 							return;
 						}
-						const instance = await supervisor.setPinned(instanceId, parsed.pinned !== false);
+						const instance = await supervisor.setPinned(instanceIdResult.instanceId, parsed.pinned !== false);
 						response.writeHead(200, { "content-type": "application/json" });
 						response.end(
 							JSON.stringify(instance ? { ok: true, instance } : { ok: false, error: "Unknown instance" }),
@@ -2253,18 +2517,20 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			request.on("end", () => {
 				void (async () => {
 					try {
-						const parsed = JSON.parse(body) as { id?: string; path?: string; cwd?: string; archived?: boolean };
-						const instanceId =
-							parsed.id ??
-							(parsed.path
-								? supervisor.ensureRecordForSessionFile(parsed.path, parsed.cwd ?? path.dirname(parsed.path)).id
-								: undefined);
-						if (!instanceId) {
+						const parsed = JSON.parse(body) as {
+							id?: string;
+							path?: string;
+							cwd?: string;
+							archived?: boolean;
+							namespace?: string;
+						};
+						const instanceIdResult = resolveSessionActionInstanceId(parsed);
+						if (!instanceIdResult.ok) {
 							response.writeHead(200, { "content-type": "application/json" });
-							response.end(JSON.stringify({ ok: false, error: "Missing id or path" }));
+							response.end(JSON.stringify(instanceIdResult));
 							return;
 						}
-						const instance = await supervisor.setArchived(instanceId, parsed.archived !== false);
+						const instance = await supervisor.setArchived(instanceIdResult.instanceId, parsed.archived !== false);
 						response.writeHead(200, { "content-type": "application/json" });
 						response.end(
 							JSON.stringify(instance ? { ok: true, instance } : { ok: false, error: "Unknown instance" }),
@@ -2315,6 +2581,100 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 						);
 					}
 				})();
+			});
+			return;
+		}
+
+		// POST /api/sessions/move — move a session to another namespace (see
+		// namespaces.ts). The session file itself does not move; a live instance is
+		// stopped and, if resumable, respawned under the target namespace's env.
+		if (request.method === "POST" && url.pathname === "/api/sessions/move") {
+			let body = "";
+			request.on("data", (chunk: Buffer | string) => {
+				body += chunk.toString();
+			});
+			request.on("end", () => {
+				void (async () => {
+					try {
+						const parsed = JSON.parse(body) as {
+							id?: string;
+							path?: string;
+							cwd?: string;
+							namespace?: string;
+							fromNamespace?: string;
+						};
+						const instanceIdResult = resolveSessionActionInstanceId({
+							id: parsed.id,
+							path: parsed.path,
+							cwd: parsed.cwd,
+							namespace: parsed.fromNamespace,
+						});
+						if (!instanceIdResult.ok) {
+							response.writeHead(200, { "content-type": "application/json" });
+							response.end(JSON.stringify(instanceIdResult));
+							return;
+						}
+						const result = await supervisor.moveInstanceNamespace(instanceIdResult.instanceId, parsed.namespace);
+						response.writeHead(200, { "content-type": "application/json" });
+						response.end(JSON.stringify(result));
+					} catch (error: unknown) {
+						response.writeHead(200, { "content-type": "application/json" });
+						response.end(
+							JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+						);
+					}
+				})();
+			});
+			return;
+		}
+
+		// GET /api/namespaces — list account namespaces (always includes "default").
+		// POST /api/namespaces — create a namespace: { name }
+		if (url.pathname === "/api/namespaces" && request.method === "GET") {
+			response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+			response.end(JSON.stringify({ ok: true, namespaces: listNamespaces() }));
+			return;
+		}
+		if (url.pathname === "/api/namespaces" && request.method === "POST") {
+			let body = "";
+			request.on("data", (chunk: Buffer | string) => {
+				body += chunk.toString();
+			});
+			request.on("end", () => {
+				try {
+					const parsed = JSON.parse(body) as { name?: string };
+					const result = createNamespace(parsed.name ?? "");
+					response.writeHead(200, { "content-type": "application/json" });
+					response.end(JSON.stringify(result));
+				} catch (error: unknown) {
+					response.writeHead(200, { "content-type": "application/json" });
+					response.end(
+						JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+					);
+				}
+			});
+			return;
+		}
+
+		// POST /api/namespaces/delete — remove a namespace from the registry. Refuses
+		// while any session still references it; never deletes its credential files.
+		if (url.pathname === "/api/namespaces/delete" && request.method === "POST") {
+			let body = "";
+			request.on("data", (chunk: Buffer | string) => {
+				body += chunk.toString();
+			});
+			request.on("end", () => {
+				try {
+					const parsed = JSON.parse(body) as { name?: string };
+					const result = deleteNamespace(parsed.name ?? "");
+					response.writeHead(200, { "content-type": "application/json" });
+					response.end(JSON.stringify(result));
+				} catch (error: unknown) {
+					response.writeHead(200, { "content-type": "application/json" });
+					response.end(
+						JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+					);
+				}
 			});
 			return;
 		}

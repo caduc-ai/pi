@@ -12,6 +12,12 @@ export interface RadiusRegistration {
 	expiresInMs: number;
 }
 
+/** A registered account namespace (see namespaces.ts). The implicit "default" namespace is never stored here. */
+export interface NamespaceRecord {
+	name: string;
+	createdAt: string;
+}
+
 export interface InstanceRecord {
 	id: string;
 	status: InstanceStatus;
@@ -38,4 +44,8 @@ export interface InstanceRecord {
 	// Archiving a live instance stops it first; the record is kept (unlike a
 	// plain stop, which forgets the instance) so it can be unarchived later.
 	archived?: boolean;
+	// Account namespace (see namespaces.ts): a separate PI_CODING_AGENT_DIR tree
+	// giving this session its own provider credentials and sessions directory.
+	// undefined means the implicit "default" namespace (~/.pi/agent, unchanged).
+	namespace?: string;
 }

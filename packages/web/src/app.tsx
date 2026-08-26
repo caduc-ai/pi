@@ -11,6 +11,7 @@ import {
 	activePanel,
 	commandResult,
 	connected,
+	currentNamespace,
 	instanceId,
 	sessionState,
 	sessionUnreachable,
@@ -37,6 +38,7 @@ function Header() {
 				</svg>
 			</a>
 			<span class="header-title">{name ? `pi — ${name}` : "pi"}</span>
+			{currentNamespace.value ? <span class="header-namespace-tag">{currentNamespace.value}</span> : null}
 			{cwd ? (
 				<a
 					href={`/review?cwd=${encodeURIComponent(cwd)}${instanceId ? `&instance=${encodeURIComponent(instanceId)}` : ""}`}

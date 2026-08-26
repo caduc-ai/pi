@@ -13,6 +13,7 @@
 - Added PWA metadata, icons, and a service worker so the web UI can be installed to a mobile home screen in standalone mode on supported secure origins.
 - Added a `tui` header button that swaps the chat area (message list, command result card, widgets, editor) for an xterm.js view of the real pi interactive TUI attached to the same session. Toggling it off (or the TUI process exiting) closes the attachment and resyncs the chat view with whatever happened in the TUI. The header, footer, dialogs, terminal panel, and subagents panel are unaffected and remain reachable while the TUI is showing.
 - Added a pinned-sessions sidebar when served by `pi-server`: a slim left column lists other pinned (and currently live) sessions by name, linking to `/i/<id>/`, with the current session highlighted. Hidden below 900px so it never crowds the chat area on mobile; refreshes on WebSocket reconnect and a slow ~30s poll. Not shown under bare `pi --web`, which has no pinning concept.
+- Added an account namespace tag to the header (when the session is not in the implicit `default` namespace) and to pinned-sidebar entries that span namespaces, using the pi-server dashboard-sessions data the pinned sidebar already fetches. See pi-server's account namespaces.
 
 ### Fixed
 

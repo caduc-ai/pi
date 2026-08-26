@@ -113,6 +113,13 @@ body {
 	background: var(--pi-selectedBg);
 }
 
+/* Account namespace tag for a pinned entry that is not the implicit default namespace. */
+.pinned-sidebar-item-ns {
+	margin-left: 6px;
+	font-size: 10px;
+	color: var(--pi-dim);
+}
+
 /* Slim sidebar only; on narrow screens it would crowd the chat area, so it's
    hidden rather than squeezed. */
 @media (max-width: 900px) {
@@ -153,6 +160,17 @@ body {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	flex: 1;
+}
+
+/* Account namespace (pi-server concept) this session runs under, shown only
+   when it is not the implicit default namespace. */
+.header-namespace-tag {
+	flex-shrink: 0;
+	font-size: 11px;
+	padding: 1px 6px;
+	border-radius: 3px;
+	border: 1px solid var(--pi-borderMuted);
+	color: var(--pi-dim);
 }
 
 .connection-dot {
