@@ -622,14 +622,25 @@ function renderIndexPage(): string {
 		/* Fixed-height header: the normal (title + Select trigger) and select-mode (bulk
 		   toolbar) rows share the same slot so switching between them never pushes the
 		   session list down. */
-		.sessions-header { display: flex; align-items: center; min-height: 34px; margin-top: 1.5em; }
-		.sessions-header-normal, .sessions-header-select { display: flex; align-items: center; gap: 10px; width: 100%; font-size: 0.9em; }
-		/* The Select trigger sits at the right edge; keep the toolbar's buttons there too so they appear under the cursor. */
-		.sessions-header-select { justify-content: flex-end; }
+		.sessions-header { display: flex; align-items: center; min-height: 34px; margin-top: 1.5em; gap: 10px; }
+		/* The title stays put; only the right-side controls swap between the normal
+		   controls and the bulk toolbar, so nothing disappears or shifts. */
+		.header-right { display: flex; align-items: center; gap: 10px; margin-left: auto; font-size: 0.9em; }
 		.sessions-header h2 { font-size: 1em; margin: 0; }
-		.select-trigger { margin-left: auto; background: none; border: none; color: #8abeb7; font-family: inherit; font-size: 0.85em; cursor: pointer; padding: 4px 6px; }
+		.select-trigger { background: none; border: none; color: #8abeb7; font-family: inherit; font-size: 0.85em; cursor: pointer; padding: 4px 6px; }
+		.dash-columns { display: flex; gap: 2.5em; align-items: flex-start; }
+		.dash-main { flex: 1 1 auto; min-width: 0; }
+		.dash-side { flex: 0 0 300px; }
+		.dash-side .spawn-form { margin-top: 1.5em; }
+		.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 40; display: flex; align-items: flex-start; justify-content: center; padding: 5vh 16px; }
+		.modal-panel { background: #141414; border: 1px solid #333; border-radius: 6px; width: 100%; max-width: 780px; max-height: 88vh; overflow-y: auto; padding: 0.4em 1.2em 1em; }
+		.modal-panel .sessions-header { margin-top: 0.6em; }
+		@media (max-width: 900px) {
+			.dash-columns { flex-direction: column; }
+			.dash-side { flex: none; width: 100%; }
+		}
 		.select-trigger:hover { text-decoration: underline; }
-		.sessions-header-select .row-btn { min-height: 28px; }
+		.header-right .row-btn { min-height: 28px; }
 		.pagination { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 0.6em 0; font-size: 0.85em; }
 		.pagination .row-btn:disabled { opacity: 0.4; cursor: default; }
 		.pagination .row-btn:disabled:hover { background: #1a1a1a; }
@@ -650,31 +661,25 @@ function renderIndexPage(): string {
 </head>
 <body>
 	<h1>pi</h1>
+	<div class="dash-columns">
+	<div class="dash-main">
 	<div class="sessions-header">
-		<div class="sessions-header-normal" id="sessions-header-normal">
-			<h2>Sessions</h2>
+		<h2>Sessions</h2>
+		<div class="header-right" id="sessions-header-normal">
+			<button class="select-trigger" id="all-sessions-btn" onclick="toggleAllSessions(true)">All sessions</button>
 			<button class="select-trigger" id="select-mode-btn" onclick="toggleSelectMode()">Select</button>
 		</div>
-		<div class="sessions-header-select" id="bulk-toolbar" style="display:none">
-			<span><span id="bulk-count">0</span> selected</span>
-			<button class="row-btn" onclick="selectAllSessions()">Select all</button>
+		<div class="header-right" id="bulk-toolbar" style="display:none">
+			<span><span class="bulk-count">0</span> selected</span>
+			<button class="row-btn select-all-btn" onclick="toggleSelectAll()">Select all</button>
 			<button class="row-btn" onclick="bulkArchive()">Archive</button>
 			<button class="row-btn danger" onclick="bulkDelete()">Delete</button>
 			<button class="row-btn" onclick="toggleSelectMode()">Cancel</button>
 		</div>
 	</div>
 	<div id="session-list" class="session-list"><span class="meta">Loading...</span></div>
-	<div class="section-label" id="others-label" style="display:none">Other sessions</div>
-	<div id="others-list" class="session-list" style="min-height:0"></div>
-	<div class="pagination" id="pagination" style="display:none">
-		<button class="row-btn" id="page-prev" onclick="changePage(-1)">&larr; Prev</button>
-		<span class="meta" id="page-indicator"></span>
-		<button class="row-btn" id="page-next" onclick="changePage(1)">Next &rarr;</button>
 	</div>
-	<details class="archived-section" id="archived-section" style="display:none">
-		<summary>Archived (<span id="archived-count">0</span>)</summary>
-		<div id="archived-list" class="session-list"></div>
-	</details>
+	<div class="dash-side">
 	<div class="spawn-form">
 		<h2>New session</h2>
 		<form method="POST" action="/api/spawn" onsubmit="spawnSession(event)">
@@ -687,6 +692,37 @@ function renderIndexPage(): string {
 			<button type="submit">Spawn</button>
 		</form>
 		<div class="spawn-result" id="spawn-result"></div>
+	</div>
+	</div>
+	</div>
+	<div class="modal-overlay" id="all-sessions-modal" style="display:none">
+		<div class="modal-panel">
+			<div class="sessions-header">
+				<h2>All sessions</h2>
+				<div class="header-right" id="modal-header-normal">
+					<button class="select-trigger" onclick="toggleSelectMode()">Select</button>
+				</div>
+				<div class="header-right" id="bulk-toolbar-modal" style="display:none">
+					<span><span class="bulk-count">0</span> selected</span>
+					<button class="row-btn select-all-btn" onclick="toggleSelectAll()">Select all</button>
+					<button class="row-btn" onclick="bulkArchive()">Archive</button>
+					<button class="row-btn danger" onclick="bulkDelete()">Delete</button>
+					<button class="row-btn" onclick="toggleSelectMode()">Cancel</button>
+				</div>
+				<button class="row-btn" onclick="toggleAllSessions(false)" aria-label="Close">&#10005;</button>
+			</div>
+			<div class="section-label" id="others-label" style="display:none">Other sessions</div>
+			<div id="others-list" class="session-list" style="min-height:0"></div>
+			<div class="pagination" id="pagination" style="display:none">
+				<button class="row-btn" id="page-prev" onclick="changePage(-1)">&larr; Prev</button>
+				<span class="meta" id="page-indicator"></span>
+				<button class="row-btn" id="page-next" onclick="changePage(1)">Next &rarr;</button>
+			</div>
+			<details class="archived-section" id="archived-section" style="display:none">
+				<summary>Archived (<span id="archived-count">0</span>)</summary>
+				<div id="archived-list" class="session-list"></div>
+			</details>
+		</div>
 	</div>
 	<script>
 		if ("serviceWorker" in navigator) {
@@ -793,18 +829,33 @@ function renderIndexPage(): string {
 	// same fixed-height slot (see .sessions-header), so entering/leaving select
 	// mode swaps their visibility in place instead of adding/removing a row.
 	function updateBulkToolbar() {
-		var normal = document.getElementById("sessions-header-normal");
-		var toolbar = document.getElementById("bulk-toolbar");
-		var count = document.getElementById("bulk-count");
-		count.textContent = Object.keys(selectedKeys).length;
-		normal.style.display = selectMode ? "none" : "";
-		toolbar.style.display = selectMode ? "" : "none";
+		var n = Object.keys(selectedKeys).length;
+		document.querySelectorAll(".bulk-count").forEach(function(el) { el.textContent = n; });
+		document.querySelectorAll(".select-all-btn").forEach(function(el) { el.textContent = n > 0 ? "Deselect all" : "Select all"; });
+		document.getElementById("sessions-header-normal").style.display = selectMode ? "none" : "";
+		document.getElementById("bulk-toolbar").style.display = selectMode ? "" : "none";
+		document.getElementById("modal-header-normal").style.display = selectMode ? "none" : "";
+		document.getElementById("bulk-toolbar-modal").style.display = selectMode ? "" : "none";
 	}
 
 	function toggleSelectMode() {
 		selectMode = !selectMode;
 		document.body.classList.toggle("select-mode", selectMode);
 		if (!selectMode) clearSelection(); else updateBulkToolbar();
+	}
+
+	function toggleAllSessions(open) {
+		closeAllKebabMenus();
+		document.getElementById("all-sessions-modal").style.display = open ? "" : "none";
+	}
+	document.getElementById("all-sessions-modal").addEventListener("click", function(e) {
+		if (e.target === e.currentTarget) toggleAllSessions(false);
+	});
+
+	// Select all when nothing is selected; deselect all otherwise.
+	function toggleSelectAll() {
+		if (Object.keys(selectedKeys).length > 0) { clearSelection(); return; }
+		selectAllSessions();
 	}
 
 	// Only iterates rendered checkboxes, i.e. the current page: selecting "all"
@@ -914,7 +965,10 @@ function renderIndexPage(): string {
 		if (!e.target.closest(".kebab-wrap")) closeAllKebabMenus();
 	});
 	document.addEventListener("keydown", function(e) {
-		if (e.key === "Escape") closeAllKebabMenus();
+		if (e.key === "Escape") {
+			closeAllKebabMenus();
+			toggleAllSessions(false);
+		}
 	});
 
 	function attachRowHandlers(container) {
@@ -981,6 +1035,10 @@ function renderIndexPage(): string {
 
 			lastOtherSessions = others;
 			renderPage();
+
+			var hiddenCount = others.length + archived.length;
+			document.getElementById("all-sessions-btn").textContent =
+				hiddenCount > 0 ? "All sessions (" + hiddenCount + ")" : "All sessions";
 
 			archivedCount.textContent = archived.length;
 			archivedSection.style.display = archived.length === 0 ? "none" : "";
