@@ -11,6 +11,12 @@
  * - GET /i/<id>/subagents/file?path=<rel>  a subagent transcript/output artifact
  * - GET /review               cranium code review UI
  * - GET /themes, /theme/*     TUI theme files, shared by all instances
+ * - GET  /api/dashboard-sessions       merged live/stopped/past session list (dashboard)
+ * - POST /api/sessions/rename          rename a session (by instance id or session file path)
+ * - POST /api/sessions/pin             pin/unpin a session ("always up")
+ * - POST /api/sessions/archive         archive/unarchive a session
+ * - POST /api/sessions/delete          stop (if live), forget, and delete a session's file
+ * - GET  /api/fs/dirs?prefix=<path>    directory-only path completions for the spawn form
  */
 
 import { execFileSync, execSync } from "node:child_process";
@@ -19,6 +25,7 @@ import * as http from "node:http";
 import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
 import {
+	getAgentDir,
 	getCustomThemesDir,
 	getThemesDir,
 	getWebDistDir,
@@ -28,6 +35,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { WebSocketServer } from "ws";
 import { supervisor } from "./supervisor.ts";
+import type { InstanceRecord } from "./types.ts";
 
 const CRANIUM_BIN = process.env.PI_CRANIUM_BIN || path.join(homedir(), "dev", "cranium", "dist", "src", "cli.js");
 
@@ -347,18 +355,133 @@ function escapeHtml(text: string): string {
 	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+/**
+ * Display-name precedence for a session: the session's own name (stored in the
+ * session .jsonl via set_session_name / the dashboard rename control) wins over
+ * the instance's label, which wins over a fallback (id prefix).
+ */
+function resolveInstanceDisplayName(instance: InstanceRecord): string {
+	return instance.sessionName?.trim() || instance.label?.trim() || instance.id.slice(0, 8);
+}
+
+type DashboardSessionStatus = InstanceRecord["status"] | "past";
+
+interface DashboardSessionSummary {
+	id?: string;
+	sessionFile?: string;
+	cwd: string;
+	name: string;
+	status: DashboardSessionStatus;
+	pinned: boolean;
+	archived: boolean;
+	messageCount?: number;
+	modified?: string;
+}
+
+/**
+ * Merge tracked instances (live, stopped, or errored - anything with a
+ * persisted InstanceRecord) with past sessions found only by scanning session
+ * files on disk, deduplicated by session file so a tracked session doesn't
+ * show up twice. This is the dashboard's single session list.
+ */
+async function listDashboardSessions(): Promise<DashboardSessionSummary[]> {
+	const instances = supervisor.listInstances();
+	const trackedSessionFiles = new Set(
+		instances.filter((instance) => instance.sessionFile).map((instance) => instance.sessionFile as string),
+	);
+
+	const instanceSummaries: DashboardSessionSummary[] = instances.map((instance) => ({
+		id: instance.id,
+		sessionFile: instance.sessionFile,
+		cwd: instance.cwd,
+		name: resolveInstanceDisplayName(instance),
+		status: instance.status,
+		pinned: Boolean(instance.pinned),
+		archived: Boolean(instance.archived),
+		modified: instance.lastSeenAt ?? instance.createdAt,
+	}));
+
+	const pastSessions = await SessionManager.listAll();
+	const pastSummaries: DashboardSessionSummary[] = pastSessions
+		.filter((session) => !trackedSessionFiles.has(session.path))
+		.map((session) => ({
+			sessionFile: session.path,
+			cwd: session.cwd,
+			name: session.name?.trim() || session.firstMessage || session.id.slice(0, 8),
+			status: "past" as const,
+			pinned: false,
+			archived: false,
+			messageCount: session.messageCount,
+			modified: session.modified instanceof Date ? session.modified.toISOString() : String(session.modified),
+		}));
+
+	// Pinned sessions always sort first (as a group ordered by last-accessed, same
+	// as everyone else); status otherwise plays no role in ordering.
+	const merged = [...instanceSummaries, ...pastSummaries];
+	merged.sort((left, right) => {
+		const rank = (left.pinned ? 0 : 1) - (right.pinned ? 0 : 1);
+		if (rank !== 0) return rank;
+		return (right.modified ?? "").localeCompare(left.modified ?? "");
+	});
+	return merged;
+}
+
+/** Session .jsonl files live under a per-cwd directory below the agent dir; reject anything else. */
+function isSafeSessionFilePath(candidate: string): boolean {
+	const sessionsRoot = path.join(getAgentDir(), "sessions");
+	const resolved = path.resolve(candidate);
+	return resolved.endsWith(".jsonl") && (resolved === sessionsRoot || resolved.startsWith(sessionsRoot + path.sep));
+}
+
+const MAX_DIR_COMPLETIONS = 20;
+
+/** Expand a leading ~ (and ~/...) to the current user's home directory. */
+function expandHomePrefix(candidate: string): string {
+	if (candidate === "~") return homedir();
+	if (candidate.startsWith("~/")) return path.join(homedir(), candidate.slice(2));
+	return candidate;
+}
+
+/**
+ * Directory-only completions for a path prefix (the dashboard's "working
+ * directory" field). Splits the prefix into an existing directory to scan and
+ * a partial last segment to match; unreadable directories and entries yield no
+ * matches rather than erroring, since this only powers a best-effort dropdown.
+ */
+function listDirCompletions(prefixRaw: string): string[] {
+	const prefix = expandHomePrefix(prefixRaw.trim());
+	if (!prefix) return [];
+
+	const endsWithSep = prefix.endsWith(path.sep);
+	const base = path.resolve(prefix);
+	const dir = endsWithSep ? base : path.dirname(base);
+	const partial = endsWithSep ? "" : path.basename(base);
+
+	let entries: fs.Dirent[];
+	try {
+		entries = fs.readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return [];
+	}
+
+	const matches: string[] = [];
+	for (const entry of entries) {
+		if (matches.length >= MAX_DIR_COMPLETIONS * 4) break; // bound the scan before sorting/truncating
+		if (!entry.name.startsWith(partial)) continue;
+		if (partial === "" && entry.name.startsWith(".")) continue;
+		const fullPath = path.join(dir, entry.name);
+		try {
+			if (!fs.statSync(fullPath).isDirectory()) continue;
+		} catch {
+			continue; // unreadable or broken symlink
+		}
+		matches.push(fullPath);
+	}
+	matches.sort((a, b) => a.localeCompare(b));
+	return matches.slice(0, MAX_DIR_COMPLETIONS);
+}
+
 function renderIndexPage(): string {
-	const instances = supervisor.listLiveInstances();
-	const items =
-		instances.length === 0
-			? "<li>No instances.</li>"
-			: instances
-					.map(
-						(instance) =>
-							`<li><a href="/i/${escapeHtml(instance.id)}/">${escapeHtml(instance.label ?? instance.cwd)}</a> ` +
-							`<a class="meta" href="/review?cwd=${encodeURIComponent(instance.cwd)}&instance=${encodeURIComponent(instance.id)}&start=1">review</a></li>`,
-					)
-					.join("\n");
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -394,31 +517,65 @@ function renderIndexPage(): string {
 		.spawn-result { margin-top: 0.5em; font-size: 0.9em; }
 		.spawn-result.error { color: #e06060; }
 		.spawn-result.success { color: #60c060; }
-		.past-item { display: flex; justify-content: space-between; align-items: center; padding: 0.4em 0; gap: 8px; }
-		.past-item + .past-item { border-top: 1px solid #1a1a1a; }
-		.past-item span { font-size: 0.9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-		.past-item button { font-family: inherit; font-size: 0.85em; background: #1a1a1a; color: #8abeb7; border: 1px solid #333; padding: 4px 10px; border-radius: 3px; cursor: pointer; white-space: nowrap; flex-shrink: 0; min-height: 34px; }
-		.past-item button:hover { background: #2a2a2a; }
+		.session-row { display: flex; justify-content: space-between; align-items: center; padding: 0.5em 0; gap: 8px; flex-wrap: wrap; }
+		.session-row + .session-row { border-top: 1px solid #1a1a1a; }
+		.session-main { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+		.session-name { font-size: 0.95em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.session-name-input { font-family: inherit; font-size: 0.9em; background: #1a1a1a; color: #e6e6e6; border: 1px solid #444; border-radius: 3px; padding: 3px 6px; min-width: 0; }
+		.session-actions { display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
+		.row-btn { font-family: inherit; font-size: 0.85em; background: #1a1a1a; color: #8abeb7; border: 1px solid #333; padding: 4px 10px; border-radius: 3px; cursor: pointer; white-space: nowrap; flex-shrink: 0; min-height: 34px; text-decoration: none; display: inline-flex; align-items: center; }
+		.row-btn:hover { background: #2a2a2a; }
+		.row-btn.danger { color: #e06060; }
+		.row-btn.active { color: #d7a55b; border-color: #5a4a2a; }
+		.badge { font-size: 0.75em; padding: 1px 6px; border-radius: 3px; border: 1px solid #333; color: #999; flex-shrink: 0; }
+		.badge-online, .badge-starting { color: #60c060; border-color: #2a4a2a; }
+		.badge-error { color: #e06060; border-color: #4a2a2a; }
+		.badge-stopping { color: #d7a55b; border-color: #5a4a2a; }
+		.badge-stopped, .badge-past { color: #999; }
+		.badge-pinned { color: #8abeb7; border-color: #2a4a4a; }
+		.session-list { min-height: 1.5em; }
+		.archived-section { margin-top: 1em; }
+		.archived-section summary { cursor: pointer; color: #999; font-size: 0.9em; padding: 0.4em 0; }
+		.row-select { margin-right: 4px; flex-shrink: 0; width: 18px; height: 18px; }
+		.bulk-toolbar { display: flex; align-items: center; gap: 8px; padding: 0.5em 0; border-bottom: 1px solid #2a2a2a; margin-bottom: 0.3em; font-size: 0.9em; }
+		.bulk-toolbar .row-btn { min-height: 30px; }
+		#cwd-suggest { position: relative; }
+		.suggest-list { position: absolute; z-index: 5; background: #1a1a1a; border: 1px solid #444; border-top: none; border-radius: 0 0 4px 4px; max-width: 320px; max-height: 200px; overflow-y: auto; }
+		.suggest-list div { padding: 8px 12px; font-size: 0.9em; cursor: pointer; }
+		.suggest-list div:hover { background: #2a2a2a; }
 		@media (max-width: 600px) {
 			body { padding: 10px; }
 			.spawn-form input { max-width: none; }
 			.spawn-form button { width: 100%; }
+			.session-row { flex-direction: column; align-items: stretch; }
+			.session-actions { justify-content: flex-start; }
+			.suggest-list { max-width: none; }
 		}
 	</style>
 </head>
 <body>
 	<h1>pi</h1>
-	<h2 style="font-size:1em;margin-top:1.5em">Active sessions</h2>
-	<ul>
-${items}
-	</ul>
-	<h2 style="font-size:1em;margin-top:1.5em">Past sessions <span style="font-weight:400;color:#666;font-size:0.9em" id="past-cwd"></span></h2>
-	<div id="past-list"><span class="meta">Loading…</span></div>
+	<h2 style="font-size:1em;margin-top:1.5em">Sessions</h2>
+	<div class="bulk-toolbar" id="bulk-toolbar" style="display:none">
+		<span><span id="bulk-count">0</span> selected</span>
+		<button class="row-btn" onclick="bulkArchive()">Archive</button>
+		<button class="row-btn danger" onclick="bulkDelete()">Delete</button>
+		<button class="row-btn" onclick="clearSelection()">Clear</button>
+	</div>
+	<div id="session-list" class="session-list"><span class="meta">Loading...</span></div>
+	<details class="archived-section" id="archived-section" style="display:none">
+		<summary>Archived (<span id="archived-count">0</span>)</summary>
+		<div id="archived-list" class="session-list"></div>
+	</details>
 	<div class="spawn-form">
 		<h2>New session</h2>
 		<form method="POST" action="/api/spawn" onsubmit="spawnSession(event)">
-			<label>Working directory<br><input type="text" name="cwd" id="spawn-cwd" placeholder="${escapeHtml(process.cwd())}"/></label>
-			<label>Label (optional)<br><input type="text" name="label" id="spawn-label" placeholder="My project"/></label>
+			<label>Working directory<br>
+				<div id="cwd-suggest">
+					<input type="text" name="cwd" id="spawn-cwd" placeholder="${escapeHtml(process.cwd())}" autocomplete="off"/>
+					<div class="suggest-list" id="cwd-suggest-list" style="display:none"></div>
+				</div>
+			</label>
 			<button type="submit">Spawn</button>
 		</form>
 		<div class="spawn-result" id="spawn-result"></div>
@@ -444,7 +601,6 @@ ${items}
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
 						cwd: formData.get("cwd") || "",
-						label: formData.get("label") || undefined,
 					}),
 				});
 				const data = await res.json();
@@ -461,69 +617,275 @@ ${items}
 				resultEl.className = "spawn-result error";
 			}
 		}
-	function loadPastSessions() {
-		function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
-		var cwdInput = document.getElementById("spawn-cwd");
-		var label = document.getElementById("past-cwd");
-		var list = document.getElementById("past-list");
-		async function refresh() {
-			var cwd = cwdInput.value.trim();
-			try {
-				var res = await fetch("/api/sessions?cwd=" + encodeURIComponent(cwd));
-				var data = await res.json();
-				if (!data.ok || !data.sessions || data.sessions.length === 0) {
-					label.textContent = "";
-					list.innerHTML = '<span class="meta">No past sessions</span>';
-					return;
-				}
-				label.textContent = "(" + data.sessions.length + ")";
-				list.innerHTML = data.sessions.map(function(s) {
-					var name = s.name || s.firstMessage || s.id.slice(0, 8);
-					var date = new Date(s.modified).toLocaleDateString();
-					return '<div class="past-item">' +
-					'<span>' + esc(name) + ' <span class="meta">' + s.messageCount + ' msgs \u00b7 ' + date + '</span></span>' +
-					'<button data-session-path="' + esc(s.path) + '" data-session-cwd="' + esc(s.cwd || cwd) + '" data-session-name="' + esc(name) + '" onclick="resumeClick(this)">Resume</button>' +
-					'</div>';
-				}).join("");
-			} catch (_err) {
-				list.innerHTML = '<span class="meta error">Failed to load sessions</span>';
-			}
+	function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+	// Working-directory autocomplete: a small debounced dropdown backed by
+	// GET /api/fs/dirs, since <datalist> styling/behavior is inconsistent across
+	// mobile browsers and this keeps the same dark-theme look as the rest of the page.
+	(function setupCwdSuggest() {
+		var input = document.getElementById("spawn-cwd");
+		var list = document.getElementById("cwd-suggest-list");
+		var debounceTimer;
+		function hide() { list.style.display = "none"; list.innerHTML = ""; }
+		function render(dirs) {
+			if (!dirs || dirs.length === 0) { hide(); return; }
+			list.innerHTML = dirs.map(function(d) {
+				return '<div data-dir="' + esc(d) + '">' + esc(d) + '</div>';
+			}).join("");
+			list.style.display = "";
+			list.querySelectorAll("[data-dir]").forEach(function(item) {
+				item.onclick = function() {
+					input.value = item.getAttribute("data-dir");
+					hide();
+					input.focus();
+				};
+			});
 		}
-		cwdInput.addEventListener("change", refresh);
-		cwdInput.addEventListener("blur", refresh);
-		refresh();
+		input.addEventListener("input", function() {
+			clearTimeout(debounceTimer);
+			var value = input.value;
+			debounceTimer = setTimeout(function() {
+				fetch("/api/fs/dirs?prefix=" + encodeURIComponent(value))
+					.then(function(res) { return res.json(); })
+					.then(function(data) { if (data.ok) render(data.dirs); })
+					.catch(function() { hide(); });
+			}, 200);
+		});
+		input.addEventListener("blur", function() {
+			// Let a click on a suggestion register before the list disappears.
+			setTimeout(hide, 150);
+		});
+	})();
+
+	function statusLabel(s) {
+		if (s.status === "online" || s.status === "starting") return "live";
+		if (s.status === "stopping") return "stopping";
+		if (s.status === "error") return "error";
+		if (s.status === "past") return "past";
+		return "stopped";
 	}
 
-	function resumeClick(btn) {
-		resumeSession(btn.getAttribute("data-session-path"), btn.getAttribute("data-session-cwd"), btn.getAttribute("data-session-name"));
+	// Bulk selection (archive/delete). Pin/unpin stays per-row only.
+	var selectedKeys = {};
+	function rowKey(s) { return s.id ? ("id:" + s.id) : ("path:" + s.sessionFile); }
+
+	function updateBulkToolbar() {
+		var toolbar = document.getElementById("bulk-toolbar");
+		var count = document.getElementById("bulk-count");
+		var n = Object.keys(selectedKeys).length;
+		count.textContent = n;
+		toolbar.style.display = n === 0 ? "none" : "";
 	}
 
-	async function resumeSession(path, cwd, name) {
-		var resultEl = document.getElementById("spawn-result");
-		resultEl.textContent = "Resuming\u2026";
-		resultEl.className = "spawn-result";
-		try {
-			var res = await fetch("/api/spawn", {
+	function clearSelection() {
+		selectedKeys = {};
+		document.querySelectorAll(".row-select").forEach(function(cb) { cb.checked = false; });
+		updateBulkToolbar();
+	}
+
+	function selectedRows() {
+		return Array.prototype.slice.call(document.querySelectorAll(".row-select:checked")).map(function(cb) {
+			return cb.closest(".session-row");
+		});
+	}
+
+	async function bulkArchive() {
+		var rows = selectedRows();
+		if (rows.length === 0) return;
+		if (!window.confirm("Archive " + rows.length + " selected session(s)?")) return;
+		await Promise.all(rows.map(function(row) {
+			return fetch("/api/sessions/archive", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ cwd: cwd, label: name || undefined, sessionFile: path }),
+				body: JSON.stringify({
+					id: row.getAttribute("data-id") || undefined,
+					path: row.getAttribute("data-path") || undefined,
+					cwd: row.getAttribute("data-cwd") || undefined,
+					archived: true,
+				}),
 			});
+		}));
+		clearSelection();
+		loadSessions();
+	}
+
+	async function bulkDelete() {
+		var rows = selectedRows();
+		if (rows.length === 0) return;
+		if (!window.confirm("Delete " + rows.length + " selected session(s)? This removes their session files and cannot be undone.")) return;
+		await Promise.all(rows.map(function(row) {
+			return fetch("/api/sessions/delete", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					id: row.getAttribute("data-id") || undefined,
+					path: row.getAttribute("data-path") || undefined,
+				}),
+			});
+		}));
+		clearSelection();
+		loadSessions();
+	}
+
+	function sessionRowHtml(s) {
+		var isLive = s.status === "online" || s.status === "starting";
+		var badge = '<span class="badge badge-' + statusLabel(s) + '">' + statusLabel(s) + '</span>';
+		var pinnedBadge = s.pinned ? '<span class="badge badge-pinned">pinned</span>' : "";
+		var pinBtn = '<button class="row-btn' + (s.pinned ? ' active' : '') + '" data-action="pin">' + (s.pinned ? "Unpin" : "Pin") + '</button>';
+		var archiveBtn = '<button class="row-btn" data-action="archive">' + (s.archived ? "Unarchive" : "Archive") + '</button>';
+		var openBtn = isLive
+			? '<a class="row-btn" href="/i/' + esc(s.id) + '/">Open</a>'
+			: (s.sessionFile ? '<button class="row-btn" data-action="resume">Resume</button>' : "");
+		var key = rowKey(s);
+		var checked = selectedKeys[key] ? " checked" : "";
+		return '' +
+			'<div class="session-row" data-id="' + esc(s.id || "") + '" data-path="' + esc(s.sessionFile || "") + '" data-cwd="' + esc(s.cwd || "") + '" data-pinned="' + (s.pinned ? "true" : "false") + '" data-archived="' + (s.archived ? "true" : "false") + '">' +
+				'<input type="checkbox" class="row-select" data-key="' + esc(key) + '"' + checked + ' />' +
+				'<div class="session-main">' +
+					'<span class="session-name" data-role="name">' + esc(s.name) + '</span>' +
+					badge + pinnedBadge +
+					'<span class="meta">' + esc(s.cwd) + '</span>' +
+				'</div>' +
+				'<div class="session-actions">' +
+					'<button class="row-btn" data-action="rename">Rename</button>' +
+					pinBtn + archiveBtn + openBtn +
+					'<button class="row-btn danger" data-action="delete">Delete</button>' +
+				'</div>' +
+			'</div>';
+	}
+
+	function attachRowHandlers(container) {
+		container.querySelectorAll(".session-row").forEach(function(row) {
+			row.querySelectorAll("[data-action]").forEach(function(btn) {
+				btn.onclick = function() { handleSessionAction(row, btn.getAttribute("data-action")); };
+			});
+		});
+		container.querySelectorAll(".row-select").forEach(function(cb) {
+			cb.onchange = function() {
+				var key = cb.getAttribute("data-key");
+				if (cb.checked) selectedKeys[key] = true; else delete selectedKeys[key];
+				updateBulkToolbar();
+			};
+		});
+	}
+
+	async function loadSessions() {
+		var list = document.getElementById("session-list");
+		var archivedSection = document.getElementById("archived-section");
+		var archivedList = document.getElementById("archived-list");
+		var archivedCount = document.getElementById("archived-count");
+		try {
+			var res = await fetch("/api/dashboard-sessions");
 			var data = await res.json();
-			if (data.ok && data.instance) {
-				resultEl.textContent = "Resumed! Opening\u2026";
-				resultEl.className = "spawn-result success";
-				window.location.href = "/i/" + data.instance.id + "/";
-			} else {
-				resultEl.textContent = "Error: " + (data.error || "unknown");
-				resultEl.className = "spawn-result error";
+			if (!data.ok || !data.sessions) {
+				list.innerHTML = '<span class="meta error">Failed to load sessions</span>';
+				return;
 			}
-		} catch (error) {
-			resultEl.textContent = "Error: " + error.message;
-			resultEl.className = "spawn-result error";
+			var active = data.sessions.filter(function(s) { return !s.archived; });
+			var archived = data.sessions.filter(function(s) { return s.archived; });
+
+			// Drop selections for sessions no longer in the response (e.g. deleted).
+			var liveKeys = {};
+			data.sessions.forEach(function(s) { liveKeys[rowKey(s)] = true; });
+			Object.keys(selectedKeys).forEach(function(key) { if (!liveKeys[key]) delete selectedKeys[key]; });
+
+			list.innerHTML = active.length === 0 ? '<span class="meta">No sessions yet</span>' : active.map(sessionRowHtml).join("");
+			attachRowHandlers(list);
+
+			archivedCount.textContent = archived.length;
+			archivedSection.style.display = archived.length === 0 ? "none" : "";
+			archivedList.innerHTML = archived.map(sessionRowHtml).join("");
+			attachRowHandlers(archivedList);
+			updateBulkToolbar();
+		} catch (_err) {
+			list.innerHTML = '<span class="meta error">Failed to load sessions</span>';
 		}
 	}
 
-	loadPastSessions();
+	async function handleSessionAction(row, action) {
+		var id = row.getAttribute("data-id") || undefined;
+		var sessionPath = row.getAttribute("data-path") || undefined;
+		var cwd = row.getAttribute("data-cwd") || undefined;
+		var pinned = row.getAttribute("data-pinned") === "true";
+		var archived = row.getAttribute("data-archived") === "true";
+		var resultEl = document.getElementById("spawn-result");
+
+		if (action === "resume") {
+			resultEl.textContent = "Resuming..."; resultEl.className = "spawn-result";
+			try {
+				var res = await fetch("/api/spawn", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ cwd: cwd, sessionFile: sessionPath }),
+				});
+				var data = await res.json();
+				if (data.ok && data.instance) {
+					resultEl.textContent = "Resumed! Opening..."; resultEl.className = "spawn-result success";
+					window.location.href = "/i/" + data.instance.id + "/";
+				} else {
+					resultEl.textContent = "Error: " + (data.error || "unknown"); resultEl.className = "spawn-result error";
+				}
+			} catch (error) {
+				resultEl.textContent = "Error: " + error.message; resultEl.className = "spawn-result error";
+			}
+			return;
+		}
+
+		if (action === "rename") {
+			var current = row.querySelector('[data-role="name"]').textContent;
+			var newName = window.prompt("Rename session:", current);
+			if (newName === null || !newName.trim()) return;
+			var res = await fetch("/api/sessions/rename", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, name: newName }),
+			});
+			var data = await res.json();
+			if (!data.ok) window.alert("Rename failed: " + (data.error || "unknown"));
+			loadSessions();
+			return;
+		}
+
+		if (action === "pin") {
+			var res = await fetch("/api/sessions/pin", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, pinned: !pinned }),
+			});
+			var data = await res.json();
+			if (!data.ok) window.alert("Pin failed: " + (data.error || "unknown"));
+			loadSessions();
+			return;
+		}
+
+		if (action === "archive") {
+			var res = await fetch("/api/sessions/archive", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ id: id, path: sessionPath, cwd: cwd, archived: !archived }),
+			});
+			var data = await res.json();
+			if (!data.ok) window.alert("Archive failed: " + (data.error || "unknown"));
+			loadSessions();
+			return;
+		}
+
+		if (action === "delete") {
+			var deleteName = row.querySelector('[data-role="name"]').textContent;
+			if (!window.confirm('Delete "' + deleteName + '"? This removes the session file and cannot be undone.')) return;
+			var res = await fetch("/api/sessions/delete", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ id: id, path: sessionPath }),
+			});
+			var data = await res.json();
+			if (!data.ok) window.alert("Delete failed: " + (data.error || "unknown"));
+			loadSessions();
+			return;
+		}
+	}
+
+	loadSessions();
 	</script>
 </body>
 </html>`;
@@ -1342,6 +1704,15 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			return;
 		}
 
+		// GET /api/fs/dirs?prefix=<path> — directory-only completions for the
+		// dashboard's "working directory" field (~ expands to the home directory).
+		if (request.method === "GET" && url.pathname === "/api/fs/dirs") {
+			const prefix = url.searchParams.get("prefix") ?? "";
+			response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+			response.end(JSON.stringify({ ok: true, dirs: listDirCompletions(prefix) }));
+			return;
+		}
+
 		// GET /api/git/branch?repo=<path> — current branch of a repo, for the review header
 		if (request.method === "GET" && url.pathname === "/api/git/branch") {
 			const repo = url.searchParams.get("repo") || process.cwd();
@@ -1389,6 +1760,174 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 				});
 			return;
 		}
+
+		// GET /api/dashboard-sessions — the dashboard's unified session list: live and
+		// stopped/errored tracked instances merged with past sessions found only on
+		// disk, deduplicated by session file. Includes pinned/archived and the
+		// resolved display name (session name > label > fallback).
+		if (request.method === "GET" && url.pathname === "/api/dashboard-sessions") {
+			listDashboardSessions()
+				.then((sessions) => {
+					response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+					response.end(JSON.stringify({ ok: true, sessions }));
+				})
+				.catch((error: unknown) => {
+					response.writeHead(200, { "content-type": "application/json" });
+					response.end(JSON.stringify({ ok: false, error: String(error) }));
+				});
+			return;
+		}
+
+		// Session actions (rename/pin/archive/delete), addressed by tracked instance
+		// id or, for a past session with no InstanceRecord yet, by session file path
+		// (+ cwd, needed if a record has to be created to hold pinned/archived state).
+		if (request.method === "POST" && url.pathname === "/api/sessions/rename") {
+			let body = "";
+			request.on("data", (chunk: Buffer | string) => {
+				body += chunk.toString();
+			});
+			request.on("end", () => {
+				void (async () => {
+					try {
+						const parsed = JSON.parse(body) as { id?: string; path?: string; cwd?: string; name?: string };
+						if (!parsed.name || !parsed.name.trim()) {
+							response.writeHead(200, { "content-type": "application/json" });
+							response.end(JSON.stringify({ ok: false, error: "Name is required" }));
+							return;
+						}
+						const instanceId =
+							parsed.id ??
+							(parsed.path
+								? supervisor.ensureRecordForSessionFile(parsed.path, parsed.cwd ?? path.dirname(parsed.path)).id
+								: undefined);
+						if (!instanceId) {
+							response.writeHead(200, { "content-type": "application/json" });
+							response.end(JSON.stringify({ ok: false, error: "Missing id or path" }));
+							return;
+						}
+						const result = await supervisor.renameInstance(instanceId, parsed.name);
+						response.writeHead(200, { "content-type": "application/json" });
+						response.end(JSON.stringify(result));
+					} catch (error: unknown) {
+						response.writeHead(200, { "content-type": "application/json" });
+						response.end(
+							JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+						);
+					}
+				})();
+			});
+			return;
+		}
+
+		if (request.method === "POST" && url.pathname === "/api/sessions/pin") {
+			let body = "";
+			request.on("data", (chunk: Buffer | string) => {
+				body += chunk.toString();
+			});
+			request.on("end", () => {
+				void (async () => {
+					try {
+						const parsed = JSON.parse(body) as { id?: string; path?: string; cwd?: string; pinned?: boolean };
+						const instanceId =
+							parsed.id ??
+							(parsed.path
+								? supervisor.ensureRecordForSessionFile(parsed.path, parsed.cwd ?? path.dirname(parsed.path)).id
+								: undefined);
+						if (!instanceId) {
+							response.writeHead(200, { "content-type": "application/json" });
+							response.end(JSON.stringify({ ok: false, error: "Missing id or path" }));
+							return;
+						}
+						const instance = await supervisor.setPinned(instanceId, parsed.pinned !== false);
+						response.writeHead(200, { "content-type": "application/json" });
+						response.end(
+							JSON.stringify(instance ? { ok: true, instance } : { ok: false, error: "Unknown instance" }),
+						);
+					} catch (error: unknown) {
+						response.writeHead(200, { "content-type": "application/json" });
+						response.end(
+							JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+						);
+					}
+				})();
+			});
+			return;
+		}
+
+		if (request.method === "POST" && url.pathname === "/api/sessions/archive") {
+			let body = "";
+			request.on("data", (chunk: Buffer | string) => {
+				body += chunk.toString();
+			});
+			request.on("end", () => {
+				void (async () => {
+					try {
+						const parsed = JSON.parse(body) as { id?: string; path?: string; cwd?: string; archived?: boolean };
+						const instanceId =
+							parsed.id ??
+							(parsed.path
+								? supervisor.ensureRecordForSessionFile(parsed.path, parsed.cwd ?? path.dirname(parsed.path)).id
+								: undefined);
+						if (!instanceId) {
+							response.writeHead(200, { "content-type": "application/json" });
+							response.end(JSON.stringify({ ok: false, error: "Missing id or path" }));
+							return;
+						}
+						const instance = await supervisor.setArchived(instanceId, parsed.archived !== false);
+						response.writeHead(200, { "content-type": "application/json" });
+						response.end(
+							JSON.stringify(instance ? { ok: true, instance } : { ok: false, error: "Unknown instance" }),
+						);
+					} catch (error: unknown) {
+						response.writeHead(200, { "content-type": "application/json" });
+						response.end(
+							JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+						);
+					}
+				})();
+			});
+			return;
+		}
+
+		// Deleting a tracked instance (id) stops it, removes the record, and deletes
+		// its session file. Deleting a bare past session (path only, never tracked)
+		// just removes the file after validating it is a real session path.
+		if (request.method === "POST" && url.pathname === "/api/sessions/delete") {
+			let body = "";
+			request.on("data", (chunk: Buffer | string) => {
+				body += chunk.toString();
+			});
+			request.on("end", () => {
+				void (async () => {
+					try {
+						const parsed = JSON.parse(body) as { id?: string; path?: string };
+						if (parsed.id) {
+							const result = await supervisor.deleteInstance(parsed.id);
+							response.writeHead(200, { "content-type": "application/json" });
+							response.end(JSON.stringify(result));
+							return;
+						}
+						if (parsed.path && isSafeSessionFilePath(parsed.path)) {
+							if (fs.existsSync(parsed.path)) {
+								fs.rmSync(parsed.path);
+							}
+							response.writeHead(200, { "content-type": "application/json" });
+							response.end(JSON.stringify({ ok: true }));
+							return;
+						}
+						response.writeHead(200, { "content-type": "application/json" });
+						response.end(JSON.stringify({ ok: false, error: "Missing id or invalid path" }));
+					} catch (error: unknown) {
+						response.writeHead(200, { "content-type": "application/json" });
+						response.end(
+							JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+						);
+					}
+				})();
+			});
+			return;
+		}
+
 		// Subagent inspection API (pi-subagents extension).
 		// GET /i/<id>/subagents — list subagent runs for an instance
 		const subagentsMatch = /^\/i\/([0-9a-f-]{36})\/subagents$/.exec(url.pathname);
@@ -1719,6 +2258,9 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 				ws.close(4404, "Unknown instance");
 				return;
 			}
+			// Opening the stream counts as accessing the session, for the dashboard's
+			// last-accessed sort order.
+			supervisor.touchInstance(instanceId);
 			ws.on("message", (data) => {
 				void (async () => {
 					try {

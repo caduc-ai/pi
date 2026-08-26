@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, rmSync } from "node:fs";
 import type { Socket } from "node:net";
-import type {
-	AgentSessionEvent,
-	AgentSessionEventListener,
-	RpcCommand,
-	RpcExtensionUICancel,
-	RpcExtensionUIRequest,
-	RpcExtensionUIResponse,
-	RpcResponse,
+import {
+	type AgentSessionEvent,
+	type AgentSessionEventListener,
+	type RpcCommand,
+	type RpcExtensionUICancel,
+	type RpcExtensionUIRequest,
+	type RpcExtensionUIResponse,
+	type RpcResponse,
+	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { radiusPresence } from "./radius.ts";
 import { createRpcProcessInstance, type RpcProcessInstance } from "./rpc-process.ts";
@@ -197,11 +199,13 @@ function shouldRefreshSessionMetadata(command: RpcCommand): boolean {
 	return SESSION_METADATA_COMMANDS.has(command.type);
 }
 
-function isGetStateSuccess(
-	response: RpcResponse,
-): response is Extract<
+function isGetStateSuccess(response: RpcResponse): response is Extract<
 	RpcResponse,
-	{ success: true; command: "get_state"; data: { sessionId: string; sessionFile?: string; cwd: string } }
+	{
+		success: true;
+		command: "get_state";
+		data: { sessionId: string; sessionFile?: string; cwd: string; sessionName?: string };
+	}
 > {
 	return response.success === true && response.command === "get_state" && "data" in response;
 }
@@ -294,6 +298,9 @@ export class ServerSupervisor {
 			}
 		}
 		this.liveInstances.delete(live.record.id);
+		if (live.record.pinned) {
+			this.scheduleRespawn(live.record);
+		}
 	}
 
 	private getRpcChannel(live: LiveInstance): RpcChannel | undefined {
@@ -316,6 +323,7 @@ export class ServerSupervisor {
 		this.updateRecord(live, {
 			sessionId: response.data.sessionId,
 			sessionFile: response.data.sessionFile,
+			sessionName: response.data.sessionName,
 			...(response.data.cwd ? { cwd: response.data.cwd } : {}),
 		});
 	}
@@ -410,6 +418,24 @@ export class ServerSupervisor {
 	getLiveInstance(instanceId: string): InstanceRecord | undefined {
 		const live = this.liveInstances.get(instanceId);
 		return live ? cloneInstance(live.record) : undefined;
+	}
+
+	/**
+	 * Bump lastSeenAt for activity that doesn't otherwise touch the record, e.g.
+	 * opening a session's WS stream to view it. Used for the dashboard's
+	 * last-accessed sort order.
+	 */
+	touchInstance(instanceId: string): void {
+		const live = this.liveInstances.get(instanceId);
+		if (live) {
+			this.updateRecord(live, {});
+			return;
+		}
+		const record = getInstance(instanceId);
+		if (!record) {
+			return;
+		}
+		upsertInstance({ ...record, lastSeenAt: new Date().toISOString() });
 	}
 
 	listLiveInstances(): InstanceRecord[] {
@@ -527,9 +553,304 @@ export class ServerSupervisor {
 				lastSeenAt: new Date().toISOString(),
 			};
 			this.liveInstances.delete(instanceId);
-			removeInstance(instanceId);
+			// Pinned/archived instances keep their persisted record after stopping (pinned
+			// so it can be found and respawned; archived so it stays listed under
+			// "Archived"). A plain stop forgets the instance, matching prior behavior.
+			if (live.record.pinned || live.record.archived) {
+				upsertInstance(live.record);
+			} else {
+				removeInstance(instanceId);
+			}
 		}
 		return cloneInstance(live.record);
+	}
+
+	/**
+	 * Find or create a persisted (non-live) record for a session file that has no
+	 * InstanceRecord yet (a "past" session in the dashboard's merged listing, found
+	 * only by scanning session files on disk). Lets rename/pin/archive/delete
+	 * address such sessions the same way as a tracked instance.
+	 */
+	ensureRecordForSessionFile(sessionFile: string, cwd: string, sessionName?: string): InstanceRecord {
+		const existing = loadInstances().find((record) => record.sessionFile === sessionFile);
+		if (existing) {
+			return existing;
+		}
+		const now = new Date().toISOString();
+		const created: InstanceRecord = {
+			id: randomUUID(),
+			status: "stopped",
+			cwd,
+			createdAt: now,
+			lastSeenAt: now,
+			sessionFile,
+			sessionName,
+		};
+		upsertInstance(created);
+		return created;
+	}
+
+	/**
+	 * Rename a session's display name. Live instances go through the RPC
+	 * `set_session_name` command (rejected while a TUI is attached, since that
+	 * command races with the TUI's own writes to the session file). Stopped
+	 * instances write directly to the session file via SessionManager, the same
+	 * append-only session_info entry that set_session_name uses internally.
+	 */
+	async renameInstance(instanceId: string, name: string): Promise<{ ok: true } | { ok: false; error: string }> {
+		const trimmed = name.trim();
+		if (!trimmed) {
+			return { ok: false, error: "Name cannot be empty" };
+		}
+
+		const live = this.liveInstances.get(instanceId);
+		if (live) {
+			const channel = this.getRpcChannel(live);
+			if (!channel) {
+				return { ok: false, error: "Instance has no active RPC channel" };
+			}
+			const response = await channel.send({ type: "set_session_name", name: trimmed });
+			if (!response.success) {
+				return { ok: false, error: "error" in response ? response.error : "Failed to rename session" };
+			}
+			await this.syncInstanceRecord(live);
+			return { ok: true };
+		}
+
+		const record = getInstance(instanceId);
+		if (!record) {
+			return { ok: false, error: "Unknown instance" };
+		}
+		if (!record.sessionFile) {
+			return { ok: false, error: "Session has no file to rename" };
+		}
+		try {
+			SessionManager.open(record.sessionFile).appendSessionInfo(trimmed);
+			upsertInstance({ ...record, sessionName: trimmed, lastSeenAt: new Date().toISOString() });
+			return { ok: true };
+		} catch (error) {
+			return { ok: false, error: error instanceof Error ? error.message : String(error) };
+		}
+	}
+
+	/**
+	 * Pin or unpin a session. Pinned and archived are mutually exclusive. Pinning
+	 * a currently-stopped session spawns it immediately ("pinned sessions are
+	 * always up" holds right away, not just after the next restart or crash).
+	 */
+	async setPinned(instanceId: string, pinned: boolean): Promise<InstanceRecord | undefined> {
+		if (pinned) {
+			// Re-pinning resets the crash-loop guard so a manually restored session gets
+			// a fresh set of respawn attempts.
+			const target = this.liveInstances.get(instanceId)?.record ?? getInstance(instanceId);
+			if (target?.sessionFile) {
+				this.pinnedRespawnAttempts.delete(target.sessionFile);
+			}
+		}
+
+		const live = this.liveInstances.get(instanceId);
+		if (live) {
+			this.updateRecord(live, { pinned, archived: pinned ? false : live.record.archived });
+			return cloneInstance(live.record);
+		}
+
+		const record = getInstance(instanceId);
+		if (!record) {
+			return undefined;
+		}
+		const updated: InstanceRecord = {
+			...record,
+			pinned,
+			archived: pinned ? false : record.archived,
+			lastSeenAt: new Date().toISOString(),
+		};
+		upsertInstance(updated);
+
+		if (pinned && updated.sessionFile) {
+			try {
+				const spawned = await this.spawnInstance({
+					cwd: updated.cwd,
+					label: updated.label,
+					sessionFile: updated.sessionFile,
+				});
+				const spawnedLive = this.liveInstances.get(spawned.id);
+				if (spawnedLive) {
+					this.updateRecord(spawnedLive, { pinned: true, archived: false });
+				}
+				removeInstance(updated.id);
+				return this.liveInstances.get(spawned.id)?.record ?? spawned;
+			} catch (error) {
+				console.error(
+					`Failed to spawn newly pinned session ${updated.id}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+		return updated;
+	}
+
+	/**
+	 * Archive or unarchive a session. Archiving a live instance stops it first
+	 * (keeping the record, unlike a plain stop). Pinned and archived are
+	 * mutually exclusive.
+	 */
+	async setArchived(instanceId: string, archived: boolean): Promise<InstanceRecord | undefined> {
+		const live = this.liveInstances.get(instanceId);
+		if (live) {
+			if (archived) {
+				try {
+					await this.cleanupAcquiredResources(live);
+				} finally {
+					this.liveInstances.delete(instanceId);
+				}
+				live.record = {
+					...live.record,
+					status: "stopped",
+					archived: true,
+					pinned: false,
+					lastSeenAt: new Date().toISOString(),
+				};
+				upsertInstance(live.record);
+				return cloneInstance(live.record);
+			}
+			this.updateRecord(live, { archived: false });
+			return cloneInstance(live.record);
+		}
+
+		const record = getInstance(instanceId);
+		if (!record) {
+			return undefined;
+		}
+		const updated: InstanceRecord = {
+			...record,
+			archived,
+			pinned: archived ? false : record.pinned,
+			lastSeenAt: new Date().toISOString(),
+		};
+		upsertInstance(updated);
+		return updated;
+	}
+
+	/**
+	 * Delete a session entirely: stop it if live, remove its persisted record,
+	 * and delete its session .jsonl file from disk. Sessions are stored as flat
+	 * files in a per-cwd directory shared by every session for that cwd (see
+	 * SessionManager.getDefaultSessionDir), not per-session directories, so only
+	 * the one file is removed; the shared directory is left alone.
+	 */
+	async deleteInstance(instanceId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+		const record = this.getInstance(instanceId);
+		if (!record) {
+			return { ok: false, error: "Unknown instance" };
+		}
+
+		const live = this.liveInstances.get(instanceId);
+		if (live) {
+			try {
+				await this.cleanupAcquiredResources(live);
+			} finally {
+				this.liveInstances.delete(instanceId);
+			}
+		}
+		removeInstance(instanceId);
+		if (record.sessionFile) {
+			this.pinnedRespawnAttempts.delete(record.sessionFile);
+		}
+
+		if (record.sessionFile) {
+			try {
+				if (existsSync(record.sessionFile)) {
+					rmSync(record.sessionFile);
+				}
+			} catch (error) {
+				return {
+					ok: false,
+					error: `Removed instance but failed to delete session file: ${error instanceof Error ? error.message : String(error)}`,
+				};
+			}
+		}
+		return { ok: true };
+	}
+
+	/**
+	 * Auto-spawn every pinned session from its sessionFile. Called once after
+	 * recoverAfterRestart() on server startup, so pinned sessions are always up.
+	 */
+	async spawnPinnedInstances(): Promise<void> {
+		const pinnedRecords = loadInstances().filter((record) => record.pinned);
+		for (const record of pinnedRecords) {
+			if (!record.sessionFile) {
+				console.error(`Skipping pinned session ${record.id}: no session file to resume from`);
+				continue;
+			}
+			try {
+				const spawned = await this.spawnInstance({
+					cwd: record.cwd,
+					label: record.label,
+					sessionFile: record.sessionFile,
+				});
+				const live = this.liveInstances.get(spawned.id);
+				if (live) {
+					this.updateRecord(live, { pinned: true, archived: false });
+				}
+				if (record.id !== spawned.id) {
+					removeInstance(record.id);
+				}
+			} catch (error) {
+				console.error(
+					`Failed to auto-spawn pinned session ${record.id} (${record.sessionFile}): ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+	}
+
+	// Bounds automatic respawn of a pinned instance after its process exits
+	// unexpectedly, keyed by sessionFile (stable across respawns, unlike instance
+	// id). Prevents crash loops: after PINNED_RESPAWN_MAX_ATTEMPTS, the session is
+	// left in "error" status until a person intervenes (re-pin, resume, restart).
+	private readonly pinnedRespawnAttempts = new Map<string, number>();
+	private static readonly PINNED_RESPAWN_MAX_ATTEMPTS = 3;
+	private static readonly PINNED_RESPAWN_BACKOFF_MS = 5000;
+
+	private scheduleRespawn(record: InstanceRecord): void {
+		const sessionFile = record.sessionFile;
+		if (!sessionFile) {
+			console.error(`Pinned session ${record.id} exited but has no session file to respawn from`);
+			return;
+		}
+		const attempts = this.pinnedRespawnAttempts.get(sessionFile) ?? 0;
+		if (attempts >= ServerSupervisor.PINNED_RESPAWN_MAX_ATTEMPTS) {
+			console.error(`Pinned session ${sessionFile} exceeded respawn attempts (${attempts}); leaving stopped`);
+			return;
+		}
+		this.pinnedRespawnAttempts.set(sessionFile, attempts + 1);
+		setTimeout(() => {
+			void this.respawnPinned(record);
+		}, ServerSupervisor.PINNED_RESPAWN_BACKOFF_MS);
+	}
+
+	private async respawnPinned(record: InstanceRecord): Promise<void> {
+		try {
+			const spawned = await this.spawnInstance({
+				cwd: record.cwd,
+				label: record.label,
+				sessionFile: record.sessionFile,
+			});
+			const live = this.liveInstances.get(spawned.id);
+			if (live) {
+				this.updateRecord(live, { pinned: true, archived: false });
+			}
+			if (record.id !== spawned.id) {
+				removeInstance(record.id);
+			}
+			if (record.sessionFile) {
+				this.pinnedRespawnAttempts.delete(record.sessionFile);
+			}
+		} catch (error) {
+			console.error(
+				`Auto-respawn failed for pinned session ${record.sessionFile}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			this.scheduleRespawn(record);
+		}
 	}
 
 	async handleRpc(instanceId: string, command: RpcCommand): Promise<RpcResponse | undefined> {

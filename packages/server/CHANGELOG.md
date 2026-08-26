@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added session management to the web dashboard: rename (live sessions via RPC `set_session_name`, stopped sessions by writing directly to the session file), pin ("always up" - auto-spawned on server startup and auto-respawned, with a bounded retry/backoff, if the process exits unexpectedly), archive (stops a live session and hides it under a collapsed "Archived" section; pinned and archived are mutually exclusive), and delete (stops if live, forgets the instance, and removes the session's `.jsonl` file). New endpoints: `GET /api/dashboard-sessions`, `POST /api/sessions/rename`, `POST /api/sessions/pin`, `POST /api/sessions/archive`, `POST /api/sessions/delete`. The dashboard now shows one merged list of live, stopped, and past sessions (deduplicated by session file) instead of separate "Active"/"Past" lists, sorted with pinned sessions first and everyone else by last-accessed (most recent first); opening a session's WS stream, prompting, and resuming all count as access.
+- Added checkboxes per dashboard session row for bulk archive and bulk delete (single confirm showing the selected count); pin/unpin stays per-row only.
+- Added directory autocomplete to the dashboard's "Working directory" field, backed by a new `GET /api/fs/dirs?prefix=<path>` endpoint (directory-only completions, `~` expansion, capped results, unreadable directories skipped).
 - Added a file-list summary to the review page, modelled on the cranium spacemacs UI: the top-level view now lists every file in the review with a tick when reviewed and an empty box when not, marking files changed since review with a "changed" tag. Clicking a file drills into its diff, a "Files" button (or `q`/`Escape`) returns to the list, and "Mark reviewed" (or `m`) now advances straight to the next file needing review instead of leaving the review on one file at a time. `n` skips to the next file without marking.
 - Added a `git pull` after a successful merge on the review page. The merge happens on GitHub, so the local branches were left behind; the base branch is fast-forwarded too (unless it is checked out), which otherwise leaves reviews diffing against the pre-merge commit.
 - Added pull request creation to the review page's "Merge PR": when the branch has no open pull request, it offers to create one and merge it, instead of only reporting that none exists. Requires the matching `cranium review merge --create-pr` support.
@@ -19,6 +22,10 @@
 - Added `server serve --web [--web-port <port>] [--web-host <host>]`: serves the pi web UI for all supervised instances with token auth (instance index at `/`, per-instance UI at `/i/<id>/`, RPC protocol over WebSocket at `/i/<id>/ws`).
 - Added PWA asset serving for per-instance web UI paths, so installing `/i/<id>/` to a mobile home screen keeps the standalone app scoped to that session.
 - Added PWA metadata and service worker registration to the server home page, so Android browsers can install it from Add to home screen on supported secure origins.
+
+### Changed
+
+- Removed the "Label" field from the dashboard's new-session/resume forms: session identity is now the session's own name (renameable, or model-generated - see coding-agent). Old records with a stored label still display it when the session has no name of its own; nothing in the dashboard sets a label anymore.
 
 ### Fixed
 

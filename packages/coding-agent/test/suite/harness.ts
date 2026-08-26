@@ -112,7 +112,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
 	const sessionManager = options.sessionManager ?? SessionManager.inMemory();
-	const settingsManager = SettingsManager.inMemory(options.settings);
+	// Auto session naming fires a background completion against the same faux
+	// response queue as the test's own prompts; default it off here so unrelated
+	// tests aren't affected by an extra queued-response consumer. Tests exercising
+	// the feature opt back in via settings.autoNameSession.
+	const settingsManager = SettingsManager.inMemory({ autoNameSession: false, ...options.settings });
 
 	const authStorage = AuthStorage.inMemory();
 	if (withConfiguredAuth) {
