@@ -43,7 +43,19 @@ export class RpcProcessInstance {
 		// coding-agent's config paths (auth.json, settings.json, sessions/) at a
 		// separate tree instead of the normal ~/.pi/agent. See namespaces.ts.
 		const namespaceAgentDir = namespaceAgentDirOverride(options.namespace);
-		const env = namespaceAgentDir ? { ...process.env, [ENV_AGENT_DIR]: namespaceAgentDir } : process.env;
+		// CLAUDE_CONFIG_DIR: the builtin claude-bridge provider authenticates via
+		// the Claude Code CLI's own HOME-scoped credentials (~/.claude), entirely
+		// outside pi's auth.json. Without scoping it per namespace, every namespace
+		// silently rides the machine-global Claude login, defeating credential
+		// separation. A fresh namespace therefore starts logged out of Claude too;
+		// run `claude login` inside the session's terminal to opt that namespace in.
+		const env = namespaceAgentDir
+			? {
+					...process.env,
+					[ENV_AGENT_DIR]: namespaceAgentDir,
+					CLAUDE_CONFIG_DIR: join(namespaceAgentDir, "claude"),
+				}
+			: process.env;
 		this.process = spawn(rpcCommand.command, rpcCommand.args, {
 			cwd: options.cwd,
 			env,
