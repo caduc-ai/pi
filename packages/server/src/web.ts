@@ -818,6 +818,8 @@ function renderIndexPage(): string {
 	// Bulk selection (archive/delete). Pin/unpin stays per-row only. Checkboxes are
 	// hidden (visibility, not display) until the user enters select mode via the
 	// Select trigger.
+	// key -> { id, path, cwd } so bulk actions can act on selections that are not
+	// currently rendered (e.g. "Select all" spanning every page of the modal).
 	var selectedKeys = {};
 	// Which list is in select mode: null, "main" (active/pinned) or "modal"
 	// (inactive sessions). The two selections are independent.
@@ -877,10 +879,24 @@ function renderIndexPage(): string {
 
 	// Only iterates rendered checkboxes, i.e. the current page: selecting "all"
 	// selects what's visible, not the entire (possibly multi-page) session list.
+	function sessionPayload(s) { return { id: s.id || undefined, path: s.sessionFile || undefined, cwd: s.cwd || undefined }; }
+	function rowPayload(row) {
+		return {
+			id: row.getAttribute("data-id") || undefined,
+			path: row.getAttribute("data-path") || undefined,
+			cwd: row.getAttribute("data-cwd") || undefined,
+		};
+	}
+
 	function selectAllSessions() {
+		if (selectScope === "modal") {
+			// All inactive sessions across every page, not just the rendered one.
+			lastOtherSessions.forEach(function(s) { selectedKeys[rowKey(s)] = sessionPayload(s); });
+		}
 		scopeRoot().querySelectorAll(".row-select").forEach(function(cb) {
 			cb.checked = true;
-			selectedKeys[cb.getAttribute("data-key")] = true;
+			var row = cb.closest(".session-row");
+			selectedKeys[cb.getAttribute("data-key")] = rowPayload(row);
 		});
 		updateBulkToolbar();
 	}
@@ -891,26 +907,19 @@ function renderIndexPage(): string {
 		updateBulkToolbar();
 	}
 
-	function selectedRows() {
-		return Array.prototype.slice.call(scopeRoot().querySelectorAll(".row-select:checked")).map(function(cb) {
-			return cb.closest(".session-row");
-		});
+	function selectedPayloads() {
+		return Object.keys(selectedKeys).map(function(key) { return selectedKeys[key]; });
 	}
 
 	async function bulkArchive() {
-		var rows = selectedRows();
-		if (rows.length === 0) return;
-		if (!window.confirm("Archive " + rows.length + " selected session(s)?")) return;
-		await Promise.all(rows.map(function(row) {
+		var items = selectedPayloads();
+		if (items.length === 0) return;
+		if (!window.confirm("Archive " + items.length + " selected session(s)?")) return;
+		await Promise.all(items.map(function(item) {
 			return fetch("/api/sessions/archive", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					id: row.getAttribute("data-id") || undefined,
-					path: row.getAttribute("data-path") || undefined,
-					cwd: row.getAttribute("data-cwd") || undefined,
-					archived: true,
-				}),
+				body: JSON.stringify({ id: item.id, path: item.path, cwd: item.cwd, archived: true }),
 			});
 		}));
 		clearSelection();
@@ -918,17 +927,14 @@ function renderIndexPage(): string {
 	}
 
 	async function bulkDelete() {
-		var rows = selectedRows();
-		if (rows.length === 0) return;
-		if (!window.confirm("Delete " + rows.length + " selected session(s)? This removes their session files and cannot be undone.")) return;
-		await Promise.all(rows.map(function(row) {
+		var items = selectedPayloads();
+		if (items.length === 0) return;
+		if (!window.confirm("Delete " + items.length + " selected session(s)? This removes their session files and cannot be undone.")) return;
+		await Promise.all(items.map(function(item) {
 			return fetch("/api/sessions/delete", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					id: row.getAttribute("data-id") || undefined,
-					path: row.getAttribute("data-path") || undefined,
-				}),
+				body: JSON.stringify({ id: item.id, path: item.path }),
 			});
 		}));
 		clearSelection();
@@ -1011,7 +1017,7 @@ function renderIndexPage(): string {
 		container.querySelectorAll(".row-select").forEach(function(cb) {
 			cb.onchange = function() {
 				var key = cb.getAttribute("data-key");
-				if (cb.checked) selectedKeys[key] = true; else delete selectedKeys[key];
+				if (cb.checked) selectedKeys[key] = rowPayload(cb.closest(".session-row")); else delete selectedKeys[key];
 				updateBulkToolbar();
 			};
 		});
