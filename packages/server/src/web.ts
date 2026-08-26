@@ -606,6 +606,9 @@ function renderIndexPage(): string {
 		.kebab-wrap { position: relative; flex-shrink: 0; }
 		.kebab-btn { padding: 4px 8px; font-size: 1.1em; line-height: 1; }
 		.kebab-menu { position: absolute; right: 0; top: calc(100% + 4px); background: #1a1a1a; border: 1px solid #444; border-radius: 4px; z-index: 10; display: flex; flex-direction: column; min-width: 130px; overflow: hidden; }
+		/* display:flex above would otherwise override the UA's [hidden] { display:none }, leaving every menu visible. */
+		.kebab-menu[hidden] { display: none; }
+		.section-label { color: #999; font-size: 0.9em; margin: 1em 0 0.3em; }
 		.kebab-menu button { all: unset; box-sizing: border-box; cursor: pointer; padding: 10px 12px; font-size: 0.85em; font-family: inherit; color: #e6e6e6; white-space: nowrap; min-height: 38px; display: flex; align-items: center; }
 		.kebab-menu button:hover, .kebab-menu button:focus { background: #2a2a2a; }
 		.kebab-menu button.danger { color: #e06060; }
@@ -621,6 +624,8 @@ function renderIndexPage(): string {
 		   session list down. */
 		.sessions-header { display: flex; align-items: center; min-height: 34px; margin-top: 1.5em; }
 		.sessions-header-normal, .sessions-header-select { display: flex; align-items: center; gap: 10px; width: 100%; font-size: 0.9em; }
+		/* The Select trigger sits at the right edge; keep the toolbar's buttons there too so they appear under the cursor. */
+		.sessions-header-select { justify-content: flex-end; }
 		.sessions-header h2 { font-size: 1em; margin: 0; }
 		.select-trigger { margin-left: auto; background: none; border: none; color: #8abeb7; font-family: inherit; font-size: 0.85em; cursor: pointer; padding: 4px 6px; }
 		.select-trigger:hover { text-decoration: underline; }
@@ -659,6 +664,8 @@ function renderIndexPage(): string {
 		</div>
 	</div>
 	<div id="session-list" class="session-list"><span class="meta">Loading...</span></div>
+	<div class="section-label" id="others-label" style="display:none">Other sessions</div>
+	<div id="others-list" class="session-list" style="min-height:0"></div>
 	<div class="pagination" id="pagination" style="display:none">
 		<button class="row-btn" id="page-prev" onclick="changePage(-1)">&larr; Prev</button>
 		<span class="meta" id="page-indicator"></span>
@@ -780,7 +787,7 @@ function renderIndexPage(): string {
 	// selects just the current page.
 	var PAGE_SIZE = 10;
 	var currentPage = 1;
-	var lastActiveSessions = [];
+	var lastOtherSessions = [];
 
 	// The normal header (title + Select trigger) and the bulk toolbar occupy the
 	// same fixed-height slot (see .sessions-header), so entering/leaving select
@@ -951,18 +958,28 @@ function renderIndexPage(): string {
 				list.innerHTML = '<span class="meta error">Failed to load sessions</span>';
 				return;
 			}
-			var active = data.sessions.filter(function(s) { return !s.archived; });
 			var archived = data.sessions.filter(function(s) { return s.archived; });
+			// Two sections: live and pinned sessions always visible up top, everything
+			// else ("Other sessions") below, paginated. Server order (pinned-first,
+			// then last-accessed) is preserved within each section.
+			var activePinned = data.sessions.filter(function(s) {
+				return !s.archived && (s.pinned || s.status === "online" || s.status === "starting");
+			});
+			var others = data.sessions.filter(function(s) {
+				return !s.archived && !s.pinned && s.status !== "online" && s.status !== "starting";
+			});
 
 			// Drop selections for sessions no longer in the response (e.g. deleted).
 			var liveKeys = {};
 			data.sessions.forEach(function(s) { liveKeys[rowKey(s)] = true; });
 			Object.keys(selectedKeys).forEach(function(key) { if (!liveKeys[key]) delete selectedKeys[key]; });
 
-			// Already sorted pinned-first / last-accessed by the server; pagination just
-			// slices that order, so pinned sessions stay on page 1 and order is stable
-			// across pages.
-			lastActiveSessions = active;
+			list.innerHTML = activePinned.length === 0
+				? (others.length === 0 ? '<span class="meta">No sessions yet</span>' : '<span class="meta">No active sessions</span>')
+				: activePinned.map(sessionRowHtml).join("");
+			attachRowHandlers(list);
+
+			lastOtherSessions = others;
 			renderPage();
 
 			archivedCount.textContent = archived.length;
@@ -976,20 +993,22 @@ function renderIndexPage(): string {
 	}
 
 	function renderPage() {
-		var list = document.getElementById("session-list");
+		var list = document.getElementById("others-list");
+		var label = document.getElementById("others-label");
 		var pagination = document.getElementById("pagination");
-		var totalPages = Math.max(1, Math.ceil(lastActiveSessions.length / PAGE_SIZE));
+		var totalPages = Math.max(1, Math.ceil(lastOtherSessions.length / PAGE_SIZE));
 		if (currentPage > totalPages) currentPage = totalPages;
 		if (currentPage < 1) currentPage = 1;
 		var start = (currentPage - 1) * PAGE_SIZE;
-		var pageItems = lastActiveSessions.slice(start, start + PAGE_SIZE);
+		var pageItems = lastOtherSessions.slice(start, start + PAGE_SIZE);
 
-		list.innerHTML = pageItems.length === 0 ? '<span class="meta">No sessions yet</span>' : pageItems.map(sessionRowHtml).join("");
+		label.style.display = lastOtherSessions.length === 0 ? "none" : "";
+		list.innerHTML = pageItems.map(sessionRowHtml).join("");
 		attachRowHandlers(list);
 
-		if (lastActiveSessions.length > PAGE_SIZE) {
+		if (lastOtherSessions.length > PAGE_SIZE) {
 			pagination.style.display = "";
-			document.getElementById("page-indicator").textContent = "Page " + currentPage + " of " + totalPages + " (" + lastActiveSessions.length + ")";
+			document.getElementById("page-indicator").textContent = "Page " + currentPage + " of " + totalPages + " (" + lastOtherSessions.length + ")";
 			document.getElementById("page-prev").disabled = currentPage <= 1;
 			document.getElementById("page-next").disabled = currentPage >= totalPages;
 		} else {
