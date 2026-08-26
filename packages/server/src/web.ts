@@ -647,6 +647,8 @@ function renderIndexPage(): string {
 		.pagination { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 0.6em 0; font-size: 0.85em; }
 		.pagination .row-btn:disabled { opacity: 0.4; cursor: default; }
 		.pagination .row-btn:disabled:hover { background: #1a1a1a; }
+		.spawn-check { display: flex; align-items: center; gap: 8px; margin: 0.6em 0; font-size: 0.85em; color: #999; cursor: pointer; }
+		.spawn-check input { width: 16px; height: 16px; margin: 0; }
 		#cwd-suggest { position: relative; }
 		.suggest-list { position: absolute; z-index: 5; background: #1a1a1a; border: 1px solid #444; border-top: none; border-radius: 0 0 4px 4px; max-width: 320px; max-height: 200px; overflow-y: auto; }
 		.suggest-list div { padding: 8px 12px; font-size: 0.9em; cursor: pointer; }
@@ -692,6 +694,7 @@ function renderIndexPage(): string {
 					<div class="suggest-list" id="cwd-suggest-list" style="display:none"></div>
 				</div>
 			</label>
+			<label class="spawn-check"><input type="checkbox" name="mkdir" id="spawn-mkdir"/> Create directory if it doesn't exist</label>
 			<button type="submit">Spawn</button>
 		</form>
 		<div class="spawn-result" id="spawn-result"></div>
@@ -751,7 +754,7 @@ function renderIndexPage(): string {
 				const res = await fetch("/api/spawn", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ cwd: cwdValue }),
+					body: JSON.stringify({ cwd: cwdValue, createDir: formData.get("mkdir") === "on" }),
 				});
 				const data = await res.json();
 				if (data.ok && data.instance) {
@@ -1969,13 +1972,36 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			request.on("end", () => {
 				void (async () => {
 					try {
-						const parsed = JSON.parse(body) as { cwd?: string; label?: string; sessionFile?: string };
+						const parsed = JSON.parse(body) as {
+							cwd?: string;
+							label?: string;
+							sessionFile?: string;
+							createDir?: boolean;
+						};
 						const cwd = parsed.cwd?.trim();
 						// Resumes carry a sessionFile (with the stored cwd); fresh spawns must
 						// name a directory explicitly - no silent default to the server's cwd.
 						if (!cwd) {
 							response.writeHead(400, { "content-type": "application/json" });
 							response.end(JSON.stringify({ ok: false, error: "cwd is required" }));
+							return;
+						}
+						if (!fs.existsSync(cwd)) {
+							if (parsed.createDir) {
+								fs.mkdirSync(cwd, { recursive: true });
+							} else {
+								response.writeHead(400, { "content-type": "application/json" });
+								response.end(
+									JSON.stringify({
+										ok: false,
+										error: `Directory does not exist: ${cwd} (tick "Create directory" to create it)`,
+									}),
+								);
+								return;
+							}
+						} else if (!fs.statSync(cwd).isDirectory()) {
+							response.writeHead(400, { "content-type": "application/json" });
+							response.end(JSON.stringify({ ok: false, error: `Not a directory: ${cwd}` }));
 							return;
 						}
 						const instance = await supervisor.spawnInstance({
