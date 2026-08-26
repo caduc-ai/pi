@@ -568,7 +568,7 @@ function renderIndexPage(): string {
 	<title>pi server</title>
 	<style>
 		*, *::before, *::after { box-sizing: border-box; }
-		body { font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 0; padding: 16px; }
+		body { font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 0 auto; padding: 24px 48px; max-width: 1500px; }
 		h1 { font-size: 1.2em; margin-bottom: 1em; }
 		h2 { font-size: 1em; }
 		a { color: #8abeb7; }
@@ -618,7 +618,10 @@ function renderIndexPage(): string {
 		/* Space is always reserved (visibility, not display) so entering select mode never
 		   shifts row content; only visibility toggles. */
 		.row-select { margin-right: 4px; flex-shrink: 0; width: 18px; height: 18px; visibility: hidden; }
-		body.select-mode .row-select { visibility: visible; }
+		/* Selection is scoped: the main (active/pinned) list and the inactive-sessions
+		   modal each have their own select mode and selection. */
+		body.select-mode-main .dash-main .row-select { visibility: visible; }
+		body.select-mode-modal .modal-panel .row-select { visibility: visible; }
 		/* Fixed-height header: the normal (title + Select trigger) and select-mode (bulk
 		   toolbar) rows share the same slot so switching between them never pushes the
 		   session list down. */
@@ -630,7 +633,7 @@ function renderIndexPage(): string {
 		.select-trigger { background: none; border: none; color: #8abeb7; font-family: inherit; font-size: 0.85em; cursor: pointer; padding: 4px 6px; }
 		.dash-columns { display: flex; gap: 2.5em; align-items: flex-start; }
 		.dash-main { flex: 1 1 auto; min-width: 0; }
-		.dash-side { flex: 0 0 300px; }
+		.dash-side { flex: 0 0 380px; }
 		.dash-side .spawn-form { margin-top: 1.5em; }
 		.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 40; display: flex; align-items: flex-start; justify-content: center; padding: 5vh 16px; }
 		.modal-panel { background: #141414; border: 1px solid #333; border-radius: 6px; width: 100%; max-width: 780px; max-height: 88vh; overflow-y: auto; padding: 0.4em 1.2em 1em; }
@@ -664,17 +667,17 @@ function renderIndexPage(): string {
 	<div class="dash-columns">
 	<div class="dash-main">
 	<div class="sessions-header">
-		<h2>Sessions</h2>
+		<h2>Active sessions</h2>
 		<div class="header-right" id="sessions-header-normal">
-			<button class="select-trigger" id="all-sessions-btn" onclick="toggleAllSessions(true)">All sessions</button>
-			<button class="select-trigger" id="select-mode-btn" onclick="toggleSelectMode()">Select</button>
+			<button class="select-trigger" id="all-sessions-btn" onclick="toggleAllSessions(true)">Inactive sessions</button>
+			<button class="select-trigger" id="select-mode-btn" onclick="toggleSelectMode('main')">Select</button>
 		</div>
 		<div class="header-right" id="bulk-toolbar" style="display:none">
 			<span><span class="bulk-count">0</span> selected</span>
 			<button class="row-btn select-all-btn" onclick="toggleSelectAll()">Select all</button>
 			<button class="row-btn" onclick="bulkArchive()">Archive</button>
 			<button class="row-btn danger" onclick="bulkDelete()">Delete</button>
-			<button class="row-btn" onclick="toggleSelectMode()">Cancel</button>
+			<button class="row-btn" onclick="toggleSelectMode('main')">Cancel</button>
 		</div>
 	</div>
 	<div id="session-list" class="session-list"><span class="meta">Loading...</span></div>
@@ -685,7 +688,7 @@ function renderIndexPage(): string {
 		<form method="POST" action="/api/spawn" onsubmit="spawnSession(event)">
 			<label>Working directory<br>
 				<div id="cwd-suggest">
-					<input type="text" name="cwd" id="spawn-cwd" placeholder="${escapeHtml(process.cwd())}" autocomplete="off"/>
+					<input type="text" name="cwd" id="spawn-cwd" placeholder="/path/to/project" autocomplete="off" required/>
 					<div class="suggest-list" id="cwd-suggest-list" style="display:none"></div>
 				</div>
 			</label>
@@ -698,21 +701,20 @@ function renderIndexPage(): string {
 	<div class="modal-overlay" id="all-sessions-modal" style="display:none">
 		<div class="modal-panel">
 			<div class="sessions-header">
-				<h2>All sessions</h2>
+				<h2>Inactive sessions</h2>
 				<div class="header-right" id="modal-header-normal">
-					<button class="select-trigger" onclick="toggleSelectMode()">Select</button>
+					<button class="select-trigger" onclick="toggleSelectMode('modal')">Select</button>
 				</div>
 				<div class="header-right" id="bulk-toolbar-modal" style="display:none">
 					<span><span class="bulk-count">0</span> selected</span>
 					<button class="row-btn select-all-btn" onclick="toggleSelectAll()">Select all</button>
 					<button class="row-btn" onclick="bulkArchive()">Archive</button>
 					<button class="row-btn danger" onclick="bulkDelete()">Delete</button>
-					<button class="row-btn" onclick="toggleSelectMode()">Cancel</button>
+					<button class="row-btn" onclick="toggleSelectMode('modal')">Cancel</button>
 				</div>
 				<button class="row-btn" onclick="toggleAllSessions(false)" aria-label="Close">&#10005;</button>
 			</div>
-			<div class="section-label" id="others-label" style="display:none">Other sessions</div>
-			<div id="others-list" class="session-list" style="min-height:0"></div>
+			<div id="others-list" class="session-list" style="min-height:0"><span class="meta">No inactive sessions</span></div>
 			<div class="pagination" id="pagination" style="display:none">
 				<button class="row-btn" id="page-prev" onclick="changePage(-1)">&larr; Prev</button>
 				<span class="meta" id="page-indicator"></span>
@@ -736,16 +738,20 @@ function renderIndexPage(): string {
 		async function spawnSession(event) {
 			event.preventDefault();
 			const resultEl = document.getElementById("spawn-result");
+			const formData = new FormData(event.target);
+			const cwdValue = (formData.get("cwd") || "").toString().trim();
+			if (!cwdValue) {
+				resultEl.textContent = "Error: a working directory is required";
+				resultEl.className = "spawn-result error";
+				return;
+			}
 			resultEl.textContent = "Spawning…";
 			resultEl.className = "spawn-result";
 			try {
-				const formData = new FormData(event.target);
 				const res = await fetch("/api/spawn", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						cwd: formData.get("cwd") || "",
-					}),
+					body: JSON.stringify({ cwd: cwdValue }),
 				});
 				const data = await res.json();
 				if (data.ok && data.instance) {
@@ -813,8 +819,15 @@ function renderIndexPage(): string {
 	// hidden (visibility, not display) until the user enters select mode via the
 	// Select trigger.
 	var selectedKeys = {};
-	var selectMode = false;
+	// Which list is in select mode: null, "main" (active/pinned) or "modal"
+	// (inactive sessions). The two selections are independent.
+	var selectScope = null;
 	function rowKey(s) { return s.id ? ("id:" + s.id) : ("path:" + s.sessionFile); }
+	function scopeRoot() {
+		return selectScope === "modal"
+			? document.querySelector("#all-sessions-modal .modal-panel")
+			: document.getElementById("session-list");
+	}
 
 	// Pagination: only the active (non-pinned-first-sorted, non-archived) list is
 	// paged. Archived stays in its collapsed <details>, unpaginated. Slicing
@@ -832,20 +845,24 @@ function renderIndexPage(): string {
 		var n = Object.keys(selectedKeys).length;
 		document.querySelectorAll(".bulk-count").forEach(function(el) { el.textContent = n; });
 		document.querySelectorAll(".select-all-btn").forEach(function(el) { el.textContent = n > 0 ? "Deselect all" : "Select all"; });
-		document.getElementById("sessions-header-normal").style.display = selectMode ? "none" : "";
-		document.getElementById("bulk-toolbar").style.display = selectMode ? "" : "none";
-		document.getElementById("modal-header-normal").style.display = selectMode ? "none" : "";
-		document.getElementById("bulk-toolbar-modal").style.display = selectMode ? "" : "none";
+		document.getElementById("sessions-header-normal").style.display = selectScope === "main" ? "none" : "";
+		document.getElementById("bulk-toolbar").style.display = selectScope === "main" ? "" : "none";
+		document.getElementById("modal-header-normal").style.display = selectScope === "modal" ? "none" : "";
+		document.getElementById("bulk-toolbar-modal").style.display = selectScope === "modal" ? "" : "none";
 	}
 
-	function toggleSelectMode() {
-		selectMode = !selectMode;
-		document.body.classList.toggle("select-mode", selectMode);
-		if (!selectMode) clearSelection(); else updateBulkToolbar();
+	function toggleSelectMode(scope) {
+		clearSelection();
+		selectScope = selectScope === scope ? null : scope;
+		document.body.classList.toggle("select-mode-main", selectScope === "main");
+		document.body.classList.toggle("select-mode-modal", selectScope === "modal");
+		updateBulkToolbar();
 	}
 
 	function toggleAllSessions(open) {
 		closeAllKebabMenus();
+		// Leaving the modal always exits its select mode so selections can't act invisibly.
+		if (!open && selectScope === "modal") toggleSelectMode("modal");
 		document.getElementById("all-sessions-modal").style.display = open ? "" : "none";
 	}
 	document.getElementById("all-sessions-modal").addEventListener("click", function(e) {
@@ -861,7 +878,7 @@ function renderIndexPage(): string {
 	// Only iterates rendered checkboxes, i.e. the current page: selecting "all"
 	// selects what's visible, not the entire (possibly multi-page) session list.
 	function selectAllSessions() {
-		document.querySelectorAll(".row-select").forEach(function(cb) {
+		scopeRoot().querySelectorAll(".row-select").forEach(function(cb) {
 			cb.checked = true;
 			selectedKeys[cb.getAttribute("data-key")] = true;
 		});
@@ -875,7 +892,7 @@ function renderIndexPage(): string {
 	}
 
 	function selectedRows() {
-		return Array.prototype.slice.call(document.querySelectorAll(".row-select:checked")).map(function(cb) {
+		return Array.prototype.slice.call(scopeRoot().querySelectorAll(".row-select:checked")).map(function(cb) {
 			return cb.closest(".session-row");
 		});
 	}
@@ -1038,7 +1055,7 @@ function renderIndexPage(): string {
 
 			var hiddenCount = others.length + archived.length;
 			document.getElementById("all-sessions-btn").textContent =
-				hiddenCount > 0 ? "All sessions (" + hiddenCount + ")" : "All sessions";
+				hiddenCount > 0 ? "Inactive sessions (" + hiddenCount + ")" : "Inactive sessions";
 
 			archivedCount.textContent = archived.length;
 			archivedSection.style.display = archived.length === 0 ? "none" : "";
@@ -1052,7 +1069,6 @@ function renderIndexPage(): string {
 
 	function renderPage() {
 		var list = document.getElementById("others-list");
-		var label = document.getElementById("others-label");
 		var pagination = document.getElementById("pagination");
 		var totalPages = Math.max(1, Math.ceil(lastOtherSessions.length / PAGE_SIZE));
 		if (currentPage > totalPages) currentPage = totalPages;
@@ -1060,8 +1076,7 @@ function renderIndexPage(): string {
 		var start = (currentPage - 1) * PAGE_SIZE;
 		var pageItems = lastOtherSessions.slice(start, start + PAGE_SIZE);
 
-		label.style.display = lastOtherSessions.length === 0 ? "none" : "";
-		list.innerHTML = pageItems.map(sessionRowHtml).join("");
+		list.innerHTML = pageItems.length === 0 ? '<span class="meta">No inactive sessions</span>' : pageItems.map(sessionRowHtml).join("");
 		attachRowHandlers(list);
 
 		if (lastOtherSessions.length > PAGE_SIZE) {
@@ -1949,7 +1964,14 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 				void (async () => {
 					try {
 						const parsed = JSON.parse(body) as { cwd?: string; label?: string; sessionFile?: string };
-						const cwd = parsed.cwd?.trim() || process.cwd();
+						const cwd = parsed.cwd?.trim();
+						// Resumes carry a sessionFile (with the stored cwd); fresh spawns must
+						// name a directory explicitly - no silent default to the server's cwd.
+						if (!cwd) {
+							response.writeHead(400, { "content-type": "application/json" });
+							response.end(JSON.stringify({ ok: false, error: "cwd is required" }));
+							return;
+						}
 						const instance = await supervisor.spawnInstance({
 							cwd,
 							label: parsed.label,
