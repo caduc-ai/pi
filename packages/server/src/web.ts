@@ -620,10 +620,12 @@ function renderIndexPage(): string {
 		/* Space is always reserved (visibility, not display) so entering select mode never
 		   shifts row content; only visibility toggles. */
 		.row-select { margin-right: 4px; flex-shrink: 0; width: 18px; height: 18px; visibility: hidden; }
-		/* Selection is scoped: the main (active/pinned) list and the inactive-sessions
-		   modal each have their own select mode and selection. */
+		/* Selection is scoped: the main (active/pinned) list, the inactive list and
+		   the archived list each have their own select mode and selection. */
 		body.select-mode-main .dash-main .row-select { visibility: visible; }
-		body.select-mode-modal .modal-panel .row-select { visibility: visible; }
+		body.select-mode-modal #others-list .row-select { visibility: visible; }
+		body.select-mode-archived #archived-list .row-select { visibility: visible; }
+		.archived-controls { display: flex; align-items: center; min-height: 30px; }
 		/* Fixed-height header: the normal (title + Select trigger) and select-mode (bulk
 		   toolbar) rows share the same slot so switching between them never pushes the
 		   session list down. */
@@ -734,6 +736,18 @@ function renderIndexPage(): string {
 			</div>
 			<details class="archived-section" id="archived-section" style="display:none">
 				<summary>Archived (<span id="archived-count">0</span>)</summary>
+				<div class="archived-controls">
+					<div class="header-right" id="archived-header-normal">
+						<button class="select-trigger" onclick="toggleSelectMode('archived')">Select</button>
+					</div>
+					<div class="header-right" id="bulk-toolbar-archived" style="display:none">
+						<span><span class="bulk-count">0</span> selected</span>
+						<button class="row-btn select-all-btn" onclick="toggleSelectAll()">Select all</button>
+						<button class="row-btn" onclick="bulkUnarchive()">Unarchive</button>
+						<button class="row-btn danger" onclick="bulkDelete()">Delete</button>
+						<button class="row-btn" onclick="toggleSelectMode('archived')">Cancel</button>
+					</div>
+				</div>
 				<div id="archived-list" class="session-list"></div>
 			</details>
 		</div>
@@ -838,9 +852,9 @@ function renderIndexPage(): string {
 	var selectScope = null;
 	function rowKey(s) { return s.id ? ("id:" + s.id) : ("path:" + s.sessionFile); }
 	function scopeRoot() {
-		return selectScope === "modal"
-			? document.querySelector("#all-sessions-modal .modal-panel")
-			: document.getElementById("session-list");
+		if (selectScope === "modal") return document.getElementById("others-list");
+		if (selectScope === "archived") return document.getElementById("archived-list");
+		return document.getElementById("session-list");
 	}
 
 	// Pagination: only the active (non-pinned-first-sorted, non-archived) list is
@@ -851,6 +865,7 @@ function renderIndexPage(): string {
 	var PAGE_SIZE = 10;
 	var currentPage = 1;
 	var lastOtherSessions = [];
+	var lastArchivedSessions = [];
 
 	// The normal header (title + Select trigger) and the bulk toolbar occupy the
 	// same fixed-height slot (see .sessions-header), so entering/leaving select
@@ -863,6 +878,8 @@ function renderIndexPage(): string {
 		document.getElementById("bulk-toolbar").style.display = selectScope === "main" ? "" : "none";
 		document.getElementById("modal-header-normal").style.display = selectScope === "modal" ? "none" : "";
 		document.getElementById("bulk-toolbar-modal").style.display = selectScope === "modal" ? "" : "none";
+		document.getElementById("archived-header-normal").style.display = selectScope === "archived" ? "none" : "";
+		document.getElementById("bulk-toolbar-archived").style.display = selectScope === "archived" ? "" : "none";
 	}
 
 	function toggleSelectMode(scope) {
@@ -870,13 +887,14 @@ function renderIndexPage(): string {
 		selectScope = selectScope === scope ? null : scope;
 		document.body.classList.toggle("select-mode-main", selectScope === "main");
 		document.body.classList.toggle("select-mode-modal", selectScope === "modal");
+		document.body.classList.toggle("select-mode-archived", selectScope === "archived");
 		updateBulkToolbar();
 	}
 
 	function toggleAllSessions(open) {
 		closeAllKebabMenus();
-		// Leaving the modal always exits its select mode so selections can't act invisibly.
-		if (!open && selectScope === "modal") toggleSelectMode("modal");
+		// Leaving the modal always exits its select modes so selections can't act invisibly.
+		if (!open && (selectScope === "modal" || selectScope === "archived")) toggleSelectMode(selectScope);
 		document.getElementById("all-sessions-modal").style.display = open ? "" : "none";
 	}
 	document.getElementById("all-sessions-modal").addEventListener("click", function(e) {
@@ -905,6 +923,9 @@ function renderIndexPage(): string {
 			// All inactive sessions across every page, not just the rendered one.
 			lastOtherSessions.forEach(function(s) { selectedKeys[rowKey(s)] = sessionPayload(s); });
 		}
+		if (selectScope === "archived") {
+			lastArchivedSessions.forEach(function(s) { selectedKeys[rowKey(s)] = sessionPayload(s); });
+		}
 		scopeRoot().querySelectorAll(".row-select").forEach(function(cb) {
 			cb.checked = true;
 			var row = cb.closest(".session-row");
@@ -932,6 +953,20 @@ function renderIndexPage(): string {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ id: item.id, path: item.path, cwd: item.cwd, archived: true }),
+			});
+		}));
+		clearSelection();
+		loadSessions();
+	}
+
+	async function bulkUnarchive() {
+		var items = selectedPayloads();
+		if (items.length === 0) return;
+		await Promise.all(items.map(function(item) {
+			return fetch("/api/sessions/archive", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ id: item.id, path: item.path, cwd: item.cwd, archived: false }),
 			});
 		}));
 		clearSelection();
@@ -1081,6 +1116,7 @@ function renderIndexPage(): string {
 
 			archivedCount.textContent = archived.length;
 			archivedSection.style.display = archived.length === 0 ? "none" : "";
+			lastArchivedSessions = archived;
 			archivedList.innerHTML = archived.map(sessionRowHtml).join("");
 			attachRowHandlers(archivedList);
 			updateBulkToolbar();
