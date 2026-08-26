@@ -4,7 +4,17 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import type { RefObject } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { RpcCommand, RpcResponse, TerminalOpenData } from "../protocol.ts";
-import { client, connected, dataAs, pushToast, terminalOpen, terminalOutput, tuiActive, tuiOutput } from "../state.ts";
+import {
+	client,
+	connected,
+	dataAs,
+	pushToast,
+	terminalOpen,
+	terminalOutput,
+	tuiActive,
+	tuiOutput,
+	tuiWaiting,
+} from "../state.ts";
 import { themeName } from "../theme.ts";
 
 /** Keys a touch keyboard cannot produce, exposed as buttons on narrow screens. */
@@ -313,8 +323,12 @@ export function TuiView() {
 	const hostRef = useRef<HTMLDivElement | null>(null);
 	const termRef = useRef<XTerm | null>(null);
 	const isActive = tuiActive.value;
+	// While the session is still streaming/compacting, attaching a second pi
+	// process would fork the session file, so we wait for the run to settle
+	// (state.ts clears tuiWaiting on settle) before opening the terminal.
+	const isWaiting = tuiWaiting.value;
 
-	const status = useXtermSession(isActive, hostRef, termRef, tuiFamily);
+	const status = useXtermSession(isActive && !isWaiting, hostRef, termRef, tuiFamily);
 
 	if (!isActive) return null;
 
@@ -322,7 +336,11 @@ export function TuiView() {
 		<div class="tui-view">
 			<div class="terminal-host-wrap">
 				<div class="tui-host" ref={hostRef} />
-				<StatusOverlay status={status} />
+				{isWaiting ? (
+					<div class="terminal-status-overlay">Waiting for the current response to finish…</div>
+				) : (
+					<StatusOverlay status={status} />
+				)}
 			</div>
 			<MobileKeyRow family={tuiFamily} onKey={() => termRef.current?.focus()} />
 		</div>

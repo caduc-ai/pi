@@ -1,4 +1,4 @@
-import { signal } from "@preact/signals";
+import { effect, signal } from "@preact/signals";
 import { INSTANCE_UNREACHABLE_CLOSE_CODE, RpcClient } from "./client.ts";
 import type {
 	AgentMessage,
@@ -537,19 +537,36 @@ let terminalOutputSeq = 0;
  * same session and should not both be visible at once.
  */
 export const tuiActive = signal(false);
+/**
+ * The user asked for the TUI while the session was still streaming/compacting.
+ * Opening a second pi process mid-response would fork the session file, so the
+ * backend refuses; instead of surfacing that as an error we hold the TUI view
+ * in a waiting state and attach automatically the moment the run settles.
+ */
+export const tuiWaiting = signal(false);
 /** Latest TUI output chunk, same shape and purpose as terminalOutput. */
 export const tuiOutput = signal<{ data: string; seq: number } | undefined>(undefined);
 let tuiOutputSeq = 0;
+
+effect(() => {
+	if (tuiWaiting.value && workingMessage.value === undefined) {
+		tuiWaiting.value = false;
+	}
+});
 
 /** Toggle the TUI view. Closing sends tui_close and resyncs the chat view. */
 export async function toggleTui(): Promise<void> {
 	if (tuiActive.value) {
 		tuiActive.value = false;
+		tuiWaiting.value = false;
 		const response = await client.command({ type: "tui_close" });
 		reportFailure(response, "Failed to close TUI");
 		await sync();
 		return;
 	}
+	// Busy: show the TUI view in a waiting state; the effect above attaches it
+	// once the current run settles.
+	tuiWaiting.value = workingMessage.value !== undefined || Boolean(sessionState.value?.isStreaming);
 	tuiActive.value = true;
 }
 
