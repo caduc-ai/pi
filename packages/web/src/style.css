@@ -537,39 +537,9 @@ body {
 	color: var(--pi-text);
 }
 
-.md .codeblock-wrap {
-	position: relative;
-}
-
-.md .codeblock-copy {
-	position: absolute;
-	top: 6px;
-	right: 6px;
-	z-index: 2;
-	font-family: inherit;
-	font-size: 0.72em;
-	padding: 2px 7px;
-	background: var(--pi-cardBg);
-	color: var(--pi-textMuted);
-	border: 1px solid var(--pi-borderMuted);
-	border-radius: 4px;
-	cursor: pointer;
-	opacity: 0;
-	transition: opacity 0.15s;
-}
-
-.md .codeblock-wrap:hover .codeblock-copy {
-	opacity: 1;
-}
-
-.md .codeblock-copy:hover {
-	color: var(--pi-text);
-}
-
-/* Touch screens have no hover; keep the buttons faintly visible. */
+/* Touch screens have no hover; keep the button faintly visible. */
 @media (hover: none) {
-	.copy-btn,
-	.md .codeblock-copy {
+	.copy-btn {
 		opacity: 0.55;
 	}
 }

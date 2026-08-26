@@ -1,6 +1,5 @@
 import { render } from "preact";
 import { App } from "./app.tsx";
-import { installCodeblockCopy } from "./copy.ts";
 import { client } from "./state.ts";
 import { initTheme } from "./theme.ts";
 import "@xterm/xterm/css/xterm.css";
@@ -9,8 +8,6 @@ import "./style.css";
 void initTheme().catch(() => {
 	// Theme endpoint unavailable (e.g. running without the bridge); CSS fallbacks apply.
 });
-
-installCodeblockCopy();
 
 if ("serviceWorker" in navigator) {
 	window.addEventListener("load", () => {

@@ -1,5 +1,5 @@
 /**
- * Clipboard helpers for the chat view.
+ * Clipboard helper for the chat view's copy buttons.
  *
  * navigator.clipboard requires a secure context; the pi web UI is commonly
  * served over plain HTTP on a LAN/tailnet address, so a hidden-textarea
@@ -28,25 +28,4 @@ export async function copyText(text: string): Promise<boolean> {
 	} catch {
 		return false;
 	}
-}
-
-/**
- * Copy buttons inside rendered markdown (code blocks) are plain HTML injected
- * by markdown.ts, not preact components, so they are handled with one
- * delegated listener instead of per-render wiring.
- */
-export function installCodeblockCopy(): void {
-	document.addEventListener("click", (event) => {
-		const target = event.target as HTMLElement | null;
-		const button = target?.closest?.(".codeblock-copy") as HTMLElement | null;
-		if (!button) return;
-		const code = button.closest(".codeblock-wrap")?.querySelector("code");
-		if (!code) return;
-		void copyText(code.textContent ?? "").then((ok) => {
-			button.textContent = ok ? "copied" : "failed";
-			window.setTimeout(() => {
-				button.textContent = "copy";
-			}, 1200);
-		});
-	});
 }

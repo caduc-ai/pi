@@ -76,8 +76,7 @@ const marked = new Marked({
 			const highlighted = language
 				? hljs.highlight(text, { language, ignoreIllegals: true }).value
 				: escapeHtml(text);
-			// The copy button is handled by a delegated listener (see copy.ts).
-			return `<div class="codeblock-wrap"><button type="button" class="codeblock-copy">copy</button><pre class="codeblock"><code class="hljs">${highlighted}</code></pre></div>`;
+			return `<pre class="codeblock"><code class="hljs">${highlighted}</code></pre>`;
 		},
 	},
 });
