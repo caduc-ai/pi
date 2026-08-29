@@ -3,9 +3,11 @@
  * their own PI_CODING_AGENT_DIR tree (provider credentials, settings, sessions).
  * See getNamespaceAgentDir in config.ts for the on-disk layout.
  */
+import { spawn } from "node:child_process";
 import { type Dirent, existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-import { getNamespaceAgentDir, isValidNamespaceName } from "./config.ts";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { getNamespaceAgentDir, isBunBinary, isValidNamespaceName } from "./config.ts";
 import { loadInstances, loadNamespaces, saveNamespaces, withNamespacesLock } from "./storage.ts";
 import type { NamespaceRecord } from "./types.ts";
 
@@ -61,6 +63,59 @@ export function resolveRequestNamespace(raw: string | undefined): NamespaceResol
 	return { ok: true, namespace };
 }
 
+/**
+ * Packages every new namespace starts with, so core workflows (subagents,
+ * Anthropic login) work without manual per-namespace installs. Installed in the
+ * background after creation via `pi install`, which also records them in the
+ * namespace's own settings.json.
+ */
+const DEFAULT_NAMESPACE_PACKAGES = ["npm:pi-subagents", "npm:@gotgenes/pi-anthropic-auth"];
+
+function piCliInvocation(): { command: string; args: string[] } {
+	if (isBunBinary) {
+		return {
+			command: join(dirname(process.execPath), process.platform === "win32" ? "pi.exe" : "pi"),
+			args: [],
+		};
+	}
+	// Same resolution as rpc-process.ts getSpawnCommand, pointed at the CLI entry.
+	const srcDir = dirname(fileURLToPath(import.meta.url));
+	const repoRoot = dirname(dirname(dirname(srcDir)));
+	const tsxBin = join(repoRoot, "node_modules", ".bin", "tsx");
+	const rpcEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry"));
+	return {
+		command: process.execPath,
+		args: [tsxBin, "--tsconfig", join(repoRoot, "tsconfig.json"), join(dirname(rpcEntry), "cli.js")],
+	};
+}
+
+/**
+ * Fire-and-forget install of the default packages into a namespace's agent
+ * dir. Sequential (npm registry + settings.json writes), logged on failure,
+ * never blocks the create endpoint. Sessions spawned before it finishes just
+ * load the packages on their next restart.
+ */
+function installDefaultPackages(name: string): void {
+	const { command, args } = piCliInvocation();
+	const env = { ...process.env, PI_CODING_AGENT_DIR: getNamespaceAgentDir(name) };
+	const runNext = (index: number): void => {
+		if (index >= DEFAULT_NAMESPACE_PACKAGES.length) return;
+		const pkg = DEFAULT_NAMESPACE_PACKAGES[index];
+		const child = spawn(command, [...args, "install", pkg], { env, stdio: "ignore" });
+		child.on("exit", (code) => {
+			if (code !== 0) {
+				console.error(`namespace ${name}: default package install failed for ${pkg} (exit ${code})`);
+			}
+			runNext(index + 1);
+		});
+		child.on("error", (error) => {
+			console.error(`namespace ${name}: default package install failed for ${pkg}: ${error.message}`);
+			runNext(index + 1);
+		});
+	};
+	runNext(0);
+}
+
 export type CreateNamespaceResult = { ok: true; namespace: NamespaceRecord } | { ok: false; error: string };
 
 export function createNamespace(nameRaw: string): CreateNamespaceResult {
@@ -77,6 +132,7 @@ export function createNamespace(nameRaw: string): CreateNamespaceResult {
 		}
 		const record: NamespaceRecord = { name, createdAt: new Date().toISOString() };
 		saveNamespaces([...loadNamespaces(), record]);
+		installDefaultPackages(name);
 		return { ok: true, namespace: record };
 	});
 }
