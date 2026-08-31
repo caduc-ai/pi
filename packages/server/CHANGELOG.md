@@ -33,7 +33,18 @@
 
 ### Fixed
 
+- Fixed the subagents panel's Transcript/Output/Files tabs staying permanently empty for `workflow`-mode async subagent runs: those steps never carry a `transcriptPath` (only `single`/`chain`-mode steps do), so `GET /i/<id>/subagents` now falls back to the step's own session file (its child agent's own session `.jsonl`, under `<sessionDir>/<runId>/run-N/session.jsonl`) as the transcript source, and `GET /i/<id>/subagents/file` resolves that path via a new, strictly-scoped `session-dir/` root.
+- Fixed `GET /i/<id>/subagents` only ever exposing a run's `output-0.log`, dropping every other child's orchestration log for multi-child (parallel/fan-out) runs; it now globs every `output-N.log` in the run directory, sorted numerically.
+- Fixed async subagent runs disappearing from the subagents panel after a fork, `/new`, `/cd`, or TUI reload changes the instance's session file: runs recorded against the pre-fork/original session file are now also matched (and flagged as `fromEarlierSession` in the API and marked in the UI) when they live under the same session directory tree as the instance's current session file.
+- Fixed a rapid run/tab/output switch in the subagents panel being able to show a slower, now-stale fetch response instead of the currently selected run/view.
+- Fixed a foreground subagent run's agent name showing as the literal `subagent` (instead of its real agent name) while still running and its basename has no numeric index suffix.
+- Fixed `GET /i/<id>/subagents/file` reading an entire large/growing transcript into memory before truncating it; it now reads at most the served byte cap directly.
 - Fixed the server web dashboard's past-sessions list being scoped to the working-directory field, which hid sessions from other projects; it now lists every session across all project directories, newest first, and scopes to a single directory only when one is typed.
+- Fixed the dashboard's bulk archive/unarchive/delete actions dropping the session's namespace, unlike the equivalent per-row actions; an untracked session in a non-default namespace could get a new bookkeeping record created under the default namespace instead.
+- Fixed the dashboard's inline rename input not stopping Escape/Enter from bubbling to the document-level handler, so canceling a rename inside the "Inactive sessions" modal (or in select mode) also closed the modal / exited select mode.
+- Fixed the dashboard's stored namespace selection not being reconciled against the live namespace list: a namespace deleted from another tab left the switcher silently showing "All namespaces" while filtering and the delete button still referenced the stale, deleted name.
+- Fixed the dashboard's dynamically created "Move to namespace…" submenu leaking an orphaned DOM node every time it was dismissed without completing a move; it is now removed instead of only hidden.
+- Added periodic (10s) auto-refresh of the dashboard's session list, skipped while select mode, an inline rename, or a kebab/move menu is active, or the tab is hidden, so a session's status change or another tab's/process's session no longer requires a manual action or full reload to show up.
 - Fixed the server review page to start from the current branch's GitHub PR by default, creating the PR when one does not already exist.
 - Removed the standalone terminal link from the server home page.
 - Fixed extension UI requests only reaching the last attached rpc_stream client: requests now fan out to all stream clients, dialog responses are first-response-wins, and other clients receive `extension_ui_cancel`.

@@ -186,6 +186,14 @@ interface SubagentRunSummary {
 	transcriptBytes?: number;
 	outputPath?: string;
 	outputs?: Array<{ name: string; path: string; bytes: number }>;
+	/**
+	 * True when this async run was only matched via the same-session-directory-tree
+	 * fallback (its status.sessionId is a fork/prior session file under the same
+	 * session root as the instance's current sessionFile), not an exact match. The
+	 * UI surfaces these separately since they may be stale relative to the active
+	 * session state.
+	 */
+	fromEarlierSession?: boolean;
 }
 
 function readJsonFile<T>(filePath: string): T | undefined {
@@ -204,9 +212,52 @@ function fileBytes(filePath: string): number | undefined {
 	}
 }
 
+/** Read at most maxBytes from the start of a file, instead of the whole thing. */
+function readBoundedFile(filePath: string, totalBytes: number, maxBytes: number): string {
+	if (totalBytes <= maxBytes) return fs.readFileSync(filePath, "utf-8");
+	const buffer = Buffer.alloc(maxBytes);
+	const fd = fs.openSync(filePath, "r");
+	try {
+		const bytesRead = fs.readSync(fd, buffer, 0, maxBytes, 0);
+		return buffer.toString("utf-8", 0, bytesRead);
+	} finally {
+		fs.closeSync(fd);
+	}
+}
+
 function subagentStatus(exitCode: unknown): "running" | "done" | "failed" {
 	if (typeof exitCode !== "number") return "running";
 	return exitCode === 0 ? "done" : "failed";
+}
+
+/**
+ * Root session file for a session path, collapsing forks to the session they were
+ * forked from. Fork files live at "<sessionRoot>/forks/<fork>.jsonl", where
+ * "<sessionRoot>" is the original session file's own companion directory (same
+ * basename, no ".jsonl" extension) — e.g.
+ *   .../sessions/<ns>/TS_ID.jsonl                    (original)
+ *   .../sessions/<ns>/TS_ID/forks/OTHER_ID.jsonl      (fork)
+ * both resolve to ".../sessions/<ns>/TS_ID.jsonl" here, so runs recorded against
+ * either one are recognized as belonging to the same session tree.
+ */
+function sessionTreeRoot(sessionFilePath: string): string {
+	const dir = path.dirname(sessionFilePath);
+	if (path.basename(dir) === "forks") {
+		return `${path.dirname(dir)}.jsonl`;
+	}
+	return sessionFilePath;
+}
+
+/**
+ * The session root's companion directory (same basename as its root session file,
+ * without the ".jsonl" extension), which holds forks/, subagent-artifacts/, and
+ * per-workflow-step run dirs. Normalizes through sessionTreeRoot first so this
+ * resolves the same directory whether sessionFilePath is the root session file or
+ * one of its forks.
+ */
+function sessionCompanionDir(sessionFilePath: string): string {
+	const root = sessionTreeRoot(sessionFilePath);
+	return root.endsWith(".jsonl") ? root.slice(0, -".jsonl".length) : root;
 }
 
 /** Temp dir used by the pi-subagents extension for async runs (mirrors its scoping). */
@@ -254,7 +305,14 @@ function listSubagentRuns(cwd: string, sessionFile?: string): SubagentRunSummary
 			const bytes = fileBytes(path.join(artifactsDir, file));
 			const meta = metas.get(base);
 			const runId = (meta?.runId as string | undefined) ?? base.split("_")[0] ?? base;
-			const agent = (meta?.agent as string | undefined) ?? (base.split("_").slice(1, -1).join("_") || "subagent");
+			// Basename shape is "<runId>_<agent>" or "<runId>_<agent>_<index>"; only drop the
+			// trailing segment when it is actually a numeric index, so a 2-segment agent
+			// name (no index suffix) isn't mistaken for one and dropped entirely.
+			const nameParts = base.split("_").slice(1);
+			const hasIndexSuffix = /^\d+$/.test(nameParts.at(-1) ?? "");
+			const agent =
+				(meta?.agent as string | undefined) ??
+				((hasIndexSuffix ? nameParts.slice(0, -1) : nameParts).join("_") || "subagent");
 			foregroundRunIds.add(runId);
 			runs.set(`foreground:${base}`, {
 				key: `foreground:${base}`,
@@ -320,19 +378,35 @@ function listSubagentRuns(cwd: string, sessionFile?: string): SubagentRunSummary
 	// <sessionDir>/subagent-artifacts/ (see status.steps[i].transcriptPath, an
 	// absolute path written by the pi-subagents extension; getArtifactPaths() in
 	// its shared/artifacts.ts derives the sibling _output.md the same way). The
-	// run dir itself additionally holds orchestration-level logs (output-0.log,
+	// run dir itself additionally holds orchestration-level logs (output-N.log,
 	// subagent-log-<runId>.md) which are exposed as named "Files" so they are
 	// reachable even when a step transcript/output is missing (e.g. a run that
 	// failed before the child agent produced one).
+	//
+	// "workflow" mode steps never get a transcriptPath (the extension only writes
+	// that field for single/chain-mode steps), but every sampled step does carry
+	// its own sessionFile: the child's own session .jsonl, at
+	// <sessionRoot>/<stepRunId>/run-N/session.jsonl, sibling to <sessionRoot>/forks/
+	// and <sessionRoot>/subagent-artifacts/. Fall back to that as the transcript
+	// source so the Transcript tab isn't permanently empty for workflow runs.
 	if (sessionFile) {
 		const asyncDir = subagentAsyncDir();
+		const currentTreeRoot = sessionTreeRoot(sessionFile);
 		if (fs.existsSync(asyncDir)) {
 			try {
 				for (const dirName of fs.readdirSync(asyncDir)) {
 					const dir = path.join(asyncDir, dirName);
 					if (!fs.statSync(dir).isDirectory()) continue;
 					const status = readJsonFile<Record<string, unknown>>(path.join(dir, "status.json"));
-					if (!status || status.sessionId !== sessionFile) continue;
+					const runSessionId = typeof status?.sessionId === "string" ? status.sessionId : undefined;
+					if (!status || !runSessionId) continue;
+					const isExactSessionMatch = runSessionId === sessionFile;
+					// A fork/new/switch/cd/tui-reload updates instance.sessionFile, which would
+					// otherwise orphan a still-running async run keyed to the old file: also
+					// accept runs whose sessionId lives under the same session directory tree
+					// (forks live under the original session's own companion directory).
+					const isSameSessionTree = !isExactSessionMatch && sessionTreeRoot(runSessionId) === currentTreeRoot;
+					if (!isExactSessionMatch && !isSameSessionTree) continue;
 					const runId = (status.runId as string | undefined) ?? dirName;
 					if (foregroundRunIds.has(runId)) continue;
 					const state = status.state as string | undefined;
@@ -347,6 +421,8 @@ function listSubagentRuns(cwd: string, sessionFile?: string): SubagentRunSummary
 					const activeStep = steps[stepIndex] ?? steps[steps.length - 1];
 					const stepTranscriptAbsolute =
 						typeof activeStep?.transcriptPath === "string" ? activeStep.transcriptPath : undefined;
+					const stepSessionFileAbsolute =
+						typeof activeStep?.sessionFile === "string" ? activeStep.sessionFile : undefined;
 
 					let transcriptPath: string | undefined;
 					let transcriptBytes: number | undefined;
@@ -360,10 +436,28 @@ function listSubagentRuns(cwd: string, sessionFile?: string): SubagentRunSummary
 						if (outputBase !== transcriptBase && fs.existsSync(path.join(stepArtifactsDir, outputBase))) {
 							outputPath = path.join("session-artifacts", outputBase);
 						}
+					} else if (stepSessionFileAbsolute && fs.existsSync(stepSessionFileAbsolute)) {
+						// Matches resolveSubagentArtifact's "session-dir" root below: the session
+						// root's companion directory, not necessarily the current (possibly forked)
+						// sessionFile's own directory.
+						const relToSessionDir = path.relative(sessionCompanionDir(sessionFile), stepSessionFileAbsolute);
+						if (relToSessionDir && !relToSessionDir.startsWith("..") && !path.isAbsolute(relToSessionDir)) {
+							transcriptPath = path.join("session-dir", relToSessionDir);
+							transcriptBytes = fileBytes(stepSessionFileAbsolute);
+						}
 					}
 
 					const outputs: NonNullable<SubagentRunSummary["outputs"]> = [];
-					for (const runLevelFile of ["output-0.log", `subagent-log-${runId}.md`]) {
+					let dirEntries: string[];
+					try {
+						dirEntries = fs.readdirSync(dir);
+					} catch {
+						dirEntries = [];
+					}
+					const outputLogFiles = dirEntries
+						.filter((entry) => /^output-\d+\.log$/.test(entry))
+						.sort((a, b) => Number(a.match(/\d+/)?.[0] ?? 0) - Number(b.match(/\d+/)?.[0] ?? 0));
+					for (const runLevelFile of [...outputLogFiles, `subagent-log-${runId}.md`]) {
 						const absolute = path.join(dir, runLevelFile);
 						const bytes = fileBytes(absolute);
 						if (bytes === undefined) continue;
@@ -390,6 +484,7 @@ function listSubagentRuns(cwd: string, sessionFile?: string): SubagentRunSummary
 						transcriptBytes,
 						outputPath,
 						outputs: outputs.length > 0 ? outputs : undefined,
+						fromEarlierSession: isSameSessionTree ? true : undefined,
 					});
 				}
 			} catch {
@@ -413,10 +508,14 @@ function resolveWithinBase(base: string, relative: string): string | undefined {
 
 /**
  * Resolve an artifact path returned by listSubagentRuns to an absolute file path,
- * rejecting any escape from the relevant root. Three roots, matched by prefix
+ * rejecting any escape from the relevant root. Four roots, matched by prefix
  * (see listSubagentRuns for what writes into each):
  * - "session-artifacts/...": async run child transcripts/outputs, next to the
  *   session file (<sessionDir>/subagent-artifacts/). Requires a sessionFile.
+ * - "session-dir/...": a workflow-mode step's own session .jsonl, under the
+ *   session's companion directory (<sessionFile-without-.jsonl>/), used as the
+ *   transcript fallback when no _transcript.jsonl artifact exists. Requires a
+ *   sessionFile.
  * - "async/<runId>/...": the async run's own orchestration-level logs, under the
  *   user-scoped temp dir.
  * - anything else: foreground run artifacts under <cwd>/.pi-subagents/.
@@ -426,6 +525,10 @@ function resolveSubagentArtifact(cwd: string, sessionFile: string | undefined, r
 		if (!sessionFile) return undefined;
 		const base = path.join(path.dirname(sessionFile), "subagent-artifacts");
 		return resolveWithinBase(base, relative.slice("session-artifacts/".length));
+	}
+	if (relative.startsWith("session-dir/")) {
+		if (!sessionFile) return undefined;
+		return resolveWithinBase(sessionCompanionDir(sessionFile), relative.slice("session-dir/".length));
 	}
 	if (relative.startsWith("async/")) {
 		return resolveWithinBase(subagentAsyncDir(), relative.slice("async/".length));
@@ -915,6 +1018,15 @@ function renderIndexPage(): string {
 		} catch (_err) {
 			// Best-effort: fall back to just "default".
 		}
+		// The stored namespace may no longer exist (e.g. deleted from another tab):
+		// reconcile against the live list instead of leaving currentNamespace pointing
+		// at a name the <select> can no longer render (it would silently fall back to
+		// showing "All namespaces" while currentNamespace/loadSessions still filtered
+		// by the stale deleted name).
+		if (currentNamespace !== "all" && allNamespaces.indexOf(currentNamespace) === -1) {
+			currentNamespace = "all";
+			localStorage.setItem("pi-dashboard-namespace", currentNamespace);
+		}
 		renderNamespaceSwitcher();
 		renderSpawnNamespaceSelect();
 	}
@@ -1165,12 +1277,13 @@ function renderIndexPage(): string {
 
 	// Only iterates rendered checkboxes, i.e. the current page: selecting "all"
 	// selects what's visible, not the entire (possibly multi-page) session list.
-	function sessionPayload(s) { return { id: s.id || undefined, path: s.sessionFile || undefined, cwd: s.cwd || undefined }; }
+	function sessionPayload(s) { return { id: s.id || undefined, path: s.sessionFile || undefined, cwd: s.cwd || undefined, namespace: s.namespace || undefined }; }
 	function rowPayload(row) {
 		return {
 			id: row.getAttribute("data-id") || undefined,
 			path: row.getAttribute("data-path") || undefined,
 			cwd: row.getAttribute("data-cwd") || undefined,
+			namespace: row.getAttribute("data-namespace") || undefined,
 		};
 	}
 
@@ -1208,7 +1321,7 @@ function renderIndexPage(): string {
 			return fetch("/api/sessions/archive", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ id: item.id, path: item.path, cwd: item.cwd, archived: true }),
+				body: JSON.stringify({ id: item.id, path: item.path, cwd: item.cwd, namespace: item.namespace, archived: true }),
 			});
 		}));
 		clearSelection();
@@ -1222,7 +1335,7 @@ function renderIndexPage(): string {
 			return fetch("/api/sessions/archive", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ id: item.id, path: item.path, cwd: item.cwd, archived: false }),
+				body: JSON.stringify({ id: item.id, path: item.path, cwd: item.cwd, namespace: item.namespace, archived: false }),
 			});
 		}));
 		clearSelection();
@@ -1237,7 +1350,7 @@ function renderIndexPage(): string {
 			return fetch("/api/sessions/delete", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ id: item.id, path: item.path }),
+				body: JSON.stringify({ id: item.id, path: item.path, namespace: item.namespace }),
 			});
 		}));
 		clearSelection();
@@ -1291,6 +1404,11 @@ function renderIndexPage(): string {
 	// Only one kebab menu open at a time; closes on outside click or Escape.
 	function closeAllKebabMenus() {
 		document.querySelectorAll(".kebab-menu").forEach(function(menu) {
+			// The "Move to…" submenu is created fresh on each use (see action === "move")
+			// and marked transient; removing it (instead of just hiding it, like the
+			// row's own permanent kebab-menu) avoids leaking an orphaned DOM node every
+			// time it is dismissed without completing a move.
+			if (menu.dataset.transient === "true") { menu.remove(); return; }
 			menu.hidden = true;
 			var btn = menu.previousElementSibling;
 			if (btn) btn.setAttribute("aria-expanded", "false");
@@ -1486,8 +1604,11 @@ function renderIndexPage(): string {
 				loadSessions();
 			};
 			editor.addEventListener("keydown", function(e) {
-				if (e.key === "Enter") { e.preventDefault(); void finish(true); }
-				if (e.key === "Escape") void finish(false);
+				// Escape must not also bubble to the document-level handler, or canceling a
+				// rename while the inactive-sessions modal is open (or select mode is on)
+				// also closes the modal / exits select mode as an unwanted side effect.
+				if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); void finish(true); }
+				if (e.key === "Escape") { e.stopPropagation(); void finish(false); }
 			});
 			editor.addEventListener("blur", function() { void finish(true); });
 			return;
@@ -1527,6 +1648,7 @@ function renderIndexPage(): string {
 			if (targets.length === 0) return;
 			var menu = document.createElement("div");
 			menu.className = "kebab-menu";
+			menu.dataset.transient = "true";
 			menu.innerHTML = '<div class="kebab-menu-label">Move to…</div>' + targets.map(function(n) {
 				return '<button type="button" data-ns="' + esc(n) + '">' + esc(n) + '</button>';
 			}).join("");
@@ -1570,6 +1692,19 @@ function renderIndexPage(): string {
 
 	loadNamespaces();
 	loadSessions();
+
+	// Auto-refresh so a session transitioning starting -> online, or another
+	// tab/process spawning or stopping instances, shows up without a manual
+	// action or full reload (matching the in-session pinned sidebar's 30s poll).
+	// Skipped while a refresh would clobber in-progress UI state: select mode, an
+	// inline rename in progress, an open kebab/move menu, or a hidden tab.
+	setInterval(function() {
+		if (document.hidden) return;
+		if (selectScope !== null) return;
+		if (document.querySelector(".rename-input")) return;
+		if (document.querySelector(".kebab-menu:not([hidden])")) return;
+		loadSessions();
+	}, 10000);
 	</script>
 </body>
 </html>`;
@@ -2784,7 +2919,11 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			}
 			const bytes = fs.statSync(filePath).size;
 			const truncated = bytes > MAX_SUBAGENT_FILE_BYTES;
-			const content = fs.readFileSync(filePath, "utf-8");
+			// Read at most MAX_SUBAGENT_FILE_BYTES bytes instead of the whole file: this
+			// endpoint is polled every 2s while a run is active, and an unbounded
+			// readFileSync on a large/growing transcript can stall the event loop for
+			// the whole server (all instances) for the duration of the read.
+			const content = readBoundedFile(filePath, bytes, MAX_SUBAGENT_FILE_BYTES);
 			const contentType =
 				path.extname(filePath).toLowerCase() === ".json" ? "application/json" : "text/plain; charset=utf-8";
 			response.writeHead(200, { "content-type": contentType, "cache-control": "no-cache" });

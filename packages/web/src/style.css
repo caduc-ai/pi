@@ -1482,6 +1482,17 @@ select.theme-toggle {
 	white-space: pre-wrap;
 }
 
+.subagents-stale-note {
+	color: var(--pi-warning);
+	font-size: 12px;
+	margin-top: 6px;
+}
+
+.subagents-tab-stale {
+	color: var(--pi-warning);
+	font-size: 10px;
+}
+
 .subagents-view-tabs {
 	border-bottom: 1px solid var(--pi-borderMuted);
 	display: flex;
