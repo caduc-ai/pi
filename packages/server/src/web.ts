@@ -21,6 +21,10 @@
  * - POST /api/namespaces               create a namespace: { name }
  * - POST /api/namespaces/delete        remove an empty namespace from the registry
  * - GET  /api/fs/dirs?prefix=<path>    directory-only path completions for the spawn form
+ * - GET  /settings                     dashboard settings page (default cwd + snippets)
+ * - GET  /api/settings                 full dashboard settings object
+ * - PUT  /api/settings                 update dashboard settings (partial: omitted fields unchanged)
+ * - GET  /api/snippets                 lightweight snippet list, for the chat composer's snippet picker
  */
 
 import { execFileSync, execSync } from "node:child_process";
@@ -46,6 +50,7 @@ import {
 	listNamespaces,
 	resolveRequestNamespace,
 } from "./namespaces.ts";
+import { getDashboardSettings, updateDashboardSettings } from "./settings.ts";
 import { supervisor } from "./supervisor.ts";
 import type { InstanceRecord } from "./types.ts";
 
@@ -728,6 +733,50 @@ function listDirCompletions(prefixRaw: string): string[] {
 	return matches.slice(0, MAX_DIR_COMPLETIONS);
 }
 
+/**
+ * Directory-only autocomplete dropdown backed by GET /api/fs/dirs, shared
+ * (by generating the same inline JS) between the dashboard's spawn form and
+ * the settings page's default working directory field. Requires an `esc`
+ * function already defined in the page's own <script> block.
+ */
+function dirSuggestScript(inputId: string, listId: string): string {
+	return `(function() {
+		var input = document.getElementById(${JSON.stringify(inputId)});
+		var list = document.getElementById(${JSON.stringify(listId)});
+		if (!input || !list) return;
+		var debounceTimer;
+		function hide() { list.style.display = "none"; list.innerHTML = ""; }
+		function render(dirs) {
+			if (!dirs || dirs.length === 0) { hide(); return; }
+			list.innerHTML = dirs.map(function(d) {
+				return '<div data-dir="' + esc(d) + '">' + esc(d) + '</div>';
+			}).join("");
+			list.style.display = "";
+			list.querySelectorAll("[data-dir]").forEach(function(item) {
+				item.onclick = function() {
+					input.value = item.getAttribute("data-dir");
+					hide();
+					input.focus();
+				};
+			});
+		}
+		input.addEventListener("input", function() {
+			clearTimeout(debounceTimer);
+			var value = input.value;
+			debounceTimer = setTimeout(function() {
+				fetch("/api/fs/dirs?prefix=" + encodeURIComponent(value))
+					.then(function(res) { return res.json(); })
+					.then(function(data) { if (data.ok) render(data.dirs); })
+					.catch(function() { hide(); });
+			}, 200);
+		});
+		input.addEventListener("blur", function() {
+			// Let a click on a suggestion register before the list disappears.
+			setTimeout(hide, 150);
+		});
+	})();`;
+}
+
 function renderIndexPage(): string {
 	return `<!doctype html>
 <html lang="en">
@@ -845,8 +894,12 @@ function renderIndexPage(): string {
 		.spawn-check input:checked { background: #2a4a3f; border-color: #3a6a5f; }
 		.spawn-check input:checked::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid #cfe8df; border-width: 0 2px 2px 0; transform: rotate(45deg); }
 		.spawn-check:hover { color: #999 !important; }
-		#cwd-suggest { position: relative; }
+		.dir-suggest { position: relative; }
 		.suggest-list { position: absolute; left: 0; right: 0; z-index: 5; background: #1a1a1a; border: 1px solid #444; border-top: none; border-radius: 0 0 4px 4px; max-height: 200px; overflow-y: auto; }
+		.page-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+		.page-top h1 { margin: 0; }
+		.page-top .select-trigger { text-decoration: none; }
+		.page-top .select-trigger:hover { text-decoration: underline; }
 		.suggest-list div { padding: 7px 9px; font-size: 0.8em; cursor: pointer; }
 		.suggest-list div:hover { background: #2a2a2a; }
 		@media (max-width: 600px) {
@@ -861,7 +914,10 @@ function renderIndexPage(): string {
 	</style>
 </head>
 <body>
-	<h1>pi</h1>
+	<div class="page-top">
+		<h1>pi</h1>
+		<a href="/settings" class="select-trigger">Settings</a>
+	</div>
 	<div class="ns-bar" id="ns-bar" style="display:none">
 		<label for="ns-select" id="ns-label">Namespace</label>
 		<select id="ns-select" onchange="onNamespaceSwitch()"></select>
@@ -897,8 +953,8 @@ function renderIndexPage(): string {
 		<h2>New session</h2>
 		<form method="POST" action="/api/spawn" onsubmit="spawnSession(event)">
 			<label>Working directory<br>
-				<div id="cwd-suggest">
-					<input type="text" name="cwd" id="spawn-cwd" placeholder="/path/to/project" autocomplete="off" required/>
+				<div class="dir-suggest" id="cwd-suggest">
+					<input type="text" name="cwd" id="spawn-cwd" placeholder="/path/to/project" autocomplete="off" value="${escapeHtml(getDashboardSettings().defaultCwd ?? "")}" required/>
 					<div class="suggest-list" id="cwd-suggest-list" style="display:none"></div>
 				</div>
 			</label>
@@ -1166,40 +1222,8 @@ function renderIndexPage(): string {
 	// Working-directory autocomplete: a small debounced dropdown backed by
 	// GET /api/fs/dirs, since <datalist> styling/behavior is inconsistent across
 	// mobile browsers and this keeps the same dark-theme look as the rest of the page.
-	(function setupCwdSuggest() {
-		var input = document.getElementById("spawn-cwd");
-		var list = document.getElementById("cwd-suggest-list");
-		var debounceTimer;
-		function hide() { list.style.display = "none"; list.innerHTML = ""; }
-		function render(dirs) {
-			if (!dirs || dirs.length === 0) { hide(); return; }
-			list.innerHTML = dirs.map(function(d) {
-				return '<div data-dir="' + esc(d) + '">' + esc(d) + '</div>';
-			}).join("");
-			list.style.display = "";
-			list.querySelectorAll("[data-dir]").forEach(function(item) {
-				item.onclick = function() {
-					input.value = item.getAttribute("data-dir");
-					hide();
-					input.focus();
-				};
-			});
-		}
-		input.addEventListener("input", function() {
-			clearTimeout(debounceTimer);
-			var value = input.value;
-			debounceTimer = setTimeout(function() {
-				fetch("/api/fs/dirs?prefix=" + encodeURIComponent(value))
-					.then(function(res) { return res.json(); })
-					.then(function(data) { if (data.ok) render(data.dirs); })
-					.catch(function() { hide(); });
-			}, 200);
-		});
-		input.addEventListener("blur", function() {
-			// Let a click on a suggestion register before the list disappears.
-			setTimeout(hide, 150);
-		});
-	})();
+	// (Shared with the settings page's default-cwd field; see dirSuggestScript in web.ts.)
+	${dirSuggestScript("spawn-cwd", "cwd-suggest-list")}
 
 	function statusLabel(s) {
 		if (s.status === "online" || s.status === "starting") return "live";
@@ -1705,6 +1729,268 @@ function renderIndexPage(): string {
 		if (document.querySelector(".kebab-menu:not([hidden])")) return;
 		loadSessions();
 	}, 10000);
+	</script>
+</body>
+</html>`;
+}
+
+/**
+ * Settings page: default working directory (prefills the dashboard's spawn
+ * form) and text snippets (inserted into the chat composer via GET
+ * /api/snippets). Same visual conventions as renderIndexPage.
+ */
+function renderSettingsPage(): string {
+	return `<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+	<meta name="theme-color" content="#18181e" />
+	<link rel="icon" href="/icons/pi.svg" type="image/svg+xml" />
+	<title>pi settings</title>
+	<style>
+		*, *::before, *::after { box-sizing: border-box; }
+		body { font-family: ui-monospace, monospace; background: #0d0d0d; color: #e6e6e6; margin: 0 auto; padding: 24px 48px; max-width: 900px; }
+		h1 { font-size: 1.2em; margin: 0; }
+		h2 { font-size: 1em; margin: 0 0 0.6em; }
+		h3 { font-size: 0.9em; margin: 0 0 0.5em; color: #999; }
+		a { color: #8abeb7; }
+		.page-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 1.5em; }
+		.page-top .home-link { text-decoration: none; color: #8abeb7; font-size: 0.9em; }
+		.page-top .home-link:hover { text-decoration: underline; }
+		.section { margin-top: 1.5em; padding: 0.9em 1em 1em; border: 1px solid #2a2a2a; border-radius: 6px; background: #121212; }
+		label { display: block; margin: 0.6em 0 0; font-size: 0.8em; color: #888; }
+		input[type="text"], textarea { font-family: inherit; font-size: 13px; background: #1a1a1a; color: #e6e6e6; border: 1px solid #3a3a3a; padding: 7px 9px; border-radius: 4px; width: 100%; margin-top: 4px; }
+		input[type="text"]::placeholder, textarea::placeholder { color: #555; }
+		textarea { resize: vertical; min-height: 5em; font-family: inherit; }
+		button { font-family: inherit; font-size: 13px; cursor: pointer; background: #2a4a3f; color: #e6e6e6; border: 1px solid #3a6a5f; padding: 7px 16px; border-radius: 4px; }
+		button:hover { background: #3a6a5f; }
+		.row-btn { font-family: inherit; font-size: 0.85em; background: #1a1a1a; color: #8abeb7; border: 1px solid #333; padding: 4px 10px; border-radius: 3px; cursor: pointer; }
+		.row-btn:hover { background: #2a2a2a; }
+		.row-btn.danger { color: #e06060; }
+		.actions { display: flex; align-items: center; gap: 10px; margin-top: 0.8em; }
+		.result { font-size: 0.8em; }
+		.result.error { color: #e06060; }
+		.result.success { color: #60c060; }
+		.meta { color: #666; font-size: 0.85em; }
+		.dir-suggest { position: relative; }
+		.suggest-list { position: absolute; left: 0; right: 0; z-index: 5; background: #1a1a1a; border: 1px solid #444; border-top: none; border-radius: 0 0 4px 4px; max-height: 200px; overflow-y: auto; }
+		.suggest-list div { padding: 7px 9px; font-size: 0.8em; cursor: pointer; }
+		.suggest-list div:hover { background: #2a2a2a; }
+		.snippet-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding: 0.6em 0; flex-wrap: wrap; }
+		.snippet-row + .snippet-row { border-top: 1px solid #1a1a1a; }
+		.snippet-main { min-width: 0; flex: 1; }
+		.snippet-name { font-size: 0.95em; }
+		.snippet-preview { font-size: 0.8em; color: #777; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+		.snippet-actions { display: flex; gap: 6px; flex-shrink: 0; }
+		.snippet-row.editing { flex-direction: column; align-items: stretch; width: 100%; }
+		.snippet-add-form { margin-top: 1.2em; padding-top: 1em; border-top: 1px solid #2a2a2a; }
+		@media (max-width: 600px) {
+			body { padding: 10px; }
+			.snippet-row { flex-direction: column; align-items: stretch; }
+		}
+	</style>
+</head>
+<body>
+	<div class="page-top">
+		<h1>Settings</h1>
+		<a href="/" class="home-link">&larr; Back to dashboard</a>
+	</div>
+
+	<div class="section">
+		<h2>Default working directory</h2>
+		<div class="dir-suggest" id="cwd-suggest">
+			<input type="text" id="settings-default-cwd" placeholder="/path/to/project" autocomplete="off" value="${escapeHtml(getDashboardSettings().defaultCwd ?? "")}" />
+			<div class="suggest-list" id="settings-cwd-suggest-list" style="display:none"></div>
+		</div>
+		<div class="actions">
+			<button type="button" onclick="saveDefaultCwd()">Save</button>
+			<span class="result" id="cwd-result"></span>
+		</div>
+	</div>
+
+	<div class="section">
+		<h2>Snippets</h2>
+		<div id="snippets-list"><span class="meta">Loading…</span></div>
+		<div class="snippet-add-form">
+			<h3>Add snippet</h3>
+			<label>Name<br><input type="text" id="snippet-name-input" maxlength="80" placeholder="Snippet name" /></label>
+			<label>Text<br><textarea id="snippet-text-input" rows="4" placeholder="Snippet text"></textarea></label>
+			<div class="actions">
+				<button type="button" onclick="addSnippet()">Add</button>
+				<span class="result" id="snippet-add-result"></span>
+			</div>
+		</div>
+	</div>
+
+	<script>
+		function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+		var settings = { snippets: [] };
+		var editingId = null;
+		var deleteArmedId = null;
+		var deleteArmTimer;
+
+		async function loadSettings() {
+			try {
+				var res = await fetch("/api/settings");
+				var data = await res.json();
+				if (!data.ok) throw new Error(data.error || "Failed to load settings");
+				settings = data.settings;
+				document.getElementById("settings-default-cwd").value = settings.defaultCwd || "";
+				renderSnippets();
+			} catch (error) {
+				document.getElementById("snippets-list").innerHTML = '<span class="meta result error">Failed to load settings: ' + esc(error.message) + '</span>';
+			}
+		}
+
+		function firstLine(text) {
+			var line = (text.split("\\n")[0] || "").trim();
+			return line.length > 140 ? line.slice(0, 140) + "\u2026" : line;
+		}
+
+		function renderSnippets() {
+			var list = document.getElementById("snippets-list");
+			var snippets = settings.snippets || [];
+			if (snippets.length === 0) {
+				list.innerHTML = '<span class="meta">No snippets yet</span>';
+				return;
+			}
+			list.innerHTML = snippets.map(function(s) {
+				if (editingId === s.id) {
+					return '<div class="snippet-row editing" data-id="' + esc(s.id) + '">' +
+						'<label>Name<br><input type="text" class="snippet-edit-name" maxlength="80" value="' + esc(s.name) + '" /></label>' +
+						'<label>Text<br><textarea class="snippet-edit-text" rows="4">' + esc(s.text) + '</textarea></label>' +
+						'<div class="actions">' +
+							'<button type="button" onclick="saveSnippetEdit(' + JSON.stringify(s.id) + ')">Save</button>' +
+							'<button type="button" class="row-btn" onclick="cancelSnippetEdit()">Cancel</button>' +
+							'<span class="result" id="snippet-edit-result-' + esc(s.id) + '"></span>' +
+						'</div>' +
+					'</div>';
+				}
+				var armed = deleteArmedId === s.id;
+				return '<div class="snippet-row" data-id="' + esc(s.id) + '">' +
+					'<div class="snippet-main">' +
+						'<div class="snippet-name">' + esc(s.name) + '</div>' +
+						'<div class="snippet-preview">' + esc(firstLine(s.text)) + '</div>' +
+					'</div>' +
+					'<div class="snippet-actions">' +
+						'<button type="button" class="row-btn" onclick="startSnippetEdit(' + JSON.stringify(s.id) + ')">Edit</button>' +
+						'<button type="button" class="row-btn danger" onclick="deleteSnippet(' + JSON.stringify(s.id) + ')">' + (armed ? "Confirm delete" : "Delete") + '</button>' +
+					'</div>' +
+				'</div>';
+			}).join("");
+		}
+
+		function startSnippetEdit(id) {
+			editingId = id;
+			deleteArmedId = null;
+			clearTimeout(deleteArmTimer);
+			renderSnippets();
+		}
+
+		function cancelSnippetEdit() {
+			editingId = null;
+			renderSnippets();
+		}
+
+		async function persistSnippets(nextSnippets) {
+			var res = await fetch("/api/settings", {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ snippets: nextSnippets }),
+			});
+			return await res.json();
+		}
+
+		async function saveSnippetEdit(id) {
+			var row = document.querySelector('.snippet-row[data-id="' + id + '"]');
+			var name = row.querySelector(".snippet-edit-name").value;
+			var text = row.querySelector(".snippet-edit-text").value;
+			var next = settings.snippets.map(function(s) { return s.id === id ? { id: id, name: name, text: text } : s; });
+			var data = await persistSnippets(next);
+			if (!data.ok) {
+				var resultEl = document.getElementById("snippet-edit-result-" + id);
+				if (resultEl) { resultEl.textContent = "Error: " + data.error; resultEl.className = "result error"; }
+				return;
+			}
+			settings = data.settings;
+			editingId = null;
+			renderSnippets();
+		}
+
+		function deleteSnippet(id) {
+			if (deleteArmedId === id) {
+				clearTimeout(deleteArmTimer);
+				deleteArmedId = null;
+				var next = settings.snippets.filter(function(s) { return s.id !== id; });
+				void persistSnippets(next).then(function(data) {
+					if (data.ok) settings = data.settings;
+					renderSnippets();
+				});
+				return;
+			}
+			deleteArmedId = id;
+			renderSnippets();
+			clearTimeout(deleteArmTimer);
+			deleteArmTimer = setTimeout(function() {
+				deleteArmedId = null;
+				renderSnippets();
+			}, 4000);
+		}
+
+		async function addSnippet() {
+			var nameInput = document.getElementById("snippet-name-input");
+			var textInput = document.getElementById("snippet-text-input");
+			var resultEl = document.getElementById("snippet-add-result");
+			var name = nameInput.value.trim();
+			var text = textInput.value;
+			if (!name || !text.trim()) {
+				resultEl.textContent = "Error: name and text are required";
+				resultEl.className = "result error";
+				return;
+			}
+			var next = settings.snippets.concat([{ name: name, text: text }]);
+			var data = await persistSnippets(next);
+			if (!data.ok) {
+				resultEl.textContent = "Error: " + data.error;
+				resultEl.className = "result error";
+				return;
+			}
+			settings = data.settings;
+			nameInput.value = "";
+			textInput.value = "";
+			resultEl.textContent = "Added";
+			resultEl.className = "result success";
+			renderSnippets();
+		}
+
+		async function saveDefaultCwd() {
+			var input = document.getElementById("settings-default-cwd");
+			var resultEl = document.getElementById("cwd-result");
+			try {
+				var res = await fetch("/api/settings", {
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ defaultCwd: input.value.trim() }),
+				});
+				var data = await res.json();
+				if (!data.ok) {
+					resultEl.textContent = "Error: " + (data.error || "unknown");
+					resultEl.className = "result error";
+					return;
+				}
+				settings = data.settings;
+				resultEl.textContent = "Saved";
+				resultEl.className = "result success";
+			} catch (error) {
+				resultEl.textContent = "Error: " + error.message;
+				resultEl.className = "result error";
+			}
+		}
+
+		loadSettings();
+		${dirSuggestScript("settings-default-cwd", "settings-cwd-suggest-list")}
 	</script>
 </body>
 </html>`;
@@ -2497,14 +2783,19 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 							createDir?: boolean;
 							namespace?: string;
 						};
-						const cwd = parsed.cwd?.trim();
+						const cwdRaw = parsed.cwd?.trim();
 						// Resumes carry a sessionFile (with the stored cwd); fresh spawns must
 						// name a directory explicitly - no silent default to the server's cwd.
-						if (!cwd) {
+						if (!cwdRaw) {
 							response.writeHead(400, { "content-type": "application/json" });
 							response.end(JSON.stringify({ ok: false, error: "cwd is required" }));
 							return;
 						}
+						// The default-cwd setting (and manual entry) may start with '~'; the
+						// working-directory autocomplete already resolves this for its own
+						// suggestions, but a value typed/prefilled without picking a suggestion
+						// reaches this handler unexpanded.
+						const cwd = expandHomePrefix(cwdRaw);
 						const namespaceResult = resolveRequestNamespace(parsed.namespace);
 						if (!namespaceResult.ok) {
 							response.writeHead(400, { "content-type": "application/json" });
@@ -2887,6 +3178,45 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 			return;
 		}
 
+		// GET /api/settings — full dashboard settings object (default cwd + snippets).
+		if (url.pathname === "/api/settings" && request.method === "GET") {
+			response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+			response.end(JSON.stringify({ ok: true, settings: getDashboardSettings() }));
+			return;
+		}
+
+		// PUT /api/settings — update dashboard settings. Fields omitted from the body
+		// keep their current stored value (see updateDashboardSettings), so the
+		// settings page can save the working-directory field and the snippet list
+		// independently.
+		if (url.pathname === "/api/settings" && request.method === "PUT") {
+			let body = "";
+			request.on("data", (chunk: Buffer | string) => {
+				body += chunk.toString();
+			});
+			request.on("end", () => {
+				try {
+					const parsed = JSON.parse(body) as { defaultCwd?: unknown; snippets?: unknown };
+					const result = updateDashboardSettings(parsed);
+					response.writeHead(result.ok ? 200 : 400, { "content-type": "application/json" });
+					response.end(JSON.stringify(result));
+				} catch (error: unknown) {
+					response.writeHead(400, { "content-type": "application/json" });
+					response.end(
+						JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+					);
+				}
+			});
+			return;
+		}
+
+		// GET /api/snippets — lightweight snippet list for the chat composer's snippet picker.
+		if (url.pathname === "/api/snippets" && request.method === "GET") {
+			response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+			response.end(JSON.stringify({ ok: true, snippets: getDashboardSettings().snippets }));
+			return;
+		}
+
 		// Subagent inspection API (pi-subagents extension).
 		// GET /i/<id>/subagents — list subagent runs for an instance
 		const subagentsMatch = /^\/i\/([0-9a-f-]{36})\/subagents$/.exec(url.pathname);
@@ -3141,6 +3471,12 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 		if (url.pathname === "/review") {
 			response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
 			response.end(renderReviewPage());
+			return;
+		}
+
+		if (url.pathname === "/settings") {
+			response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
+			response.end(renderSettingsPage());
 			return;
 		}
 
