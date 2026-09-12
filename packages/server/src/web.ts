@@ -715,6 +715,9 @@ interface DashboardSessionSummary {
 	name: string;
 	status: DashboardSessionStatus;
 	pinned: boolean;
+	// Sort key for the pinned group (ascending, i.e. first-pinned-first, never
+	// reshuffled by activity). undefined for unpinned sessions.
+	pinnedAt?: string;
 	archived: boolean;
 	// Account namespace this session belongs to; undefined means the implicit
 	// "default" namespace. See namespaces.ts.
@@ -742,6 +745,9 @@ async function listDashboardSessions(): Promise<DashboardSessionSummary[]> {
 		name: resolveInstanceDisplayName(instance),
 		status: instance.status,
 		pinned: Boolean(instance.pinned),
+		// Records pinned before pinnedAt existed fall back to createdAt so they still
+		// get a stable (if arbitrary) position instead of sorting as "most recent".
+		pinnedAt: instance.pinned ? (instance.pinnedAt ?? instance.createdAt) : undefined,
 		archived: Boolean(instance.archived),
 		namespace: instance.namespace,
 		modified: instance.lastSeenAt ?? instance.createdAt,
@@ -779,12 +785,16 @@ async function listDashboardSessions(): Promise<DashboardSessionSummary[]> {
 		}
 	}
 
-	// Pinned sessions always sort first (as a group ordered by last-accessed, same
-	// as everyone else); status otherwise plays no role in ordering.
+	// Pinned sessions always sort first, as a group in a FIXED order by pinnedAt
+	// ascending (first-pinned-first) - never by last-accessed, so using a pinned
+	// session doesn't reshuffle the group. Everyone else sorts by last-accessed.
 	const merged = [...instanceSummaries, ...pastSummaries];
 	merged.sort((left, right) => {
 		const rank = (left.pinned ? 0 : 1) - (right.pinned ? 0 : 1);
 		if (rank !== 0) return rank;
+		if (left.pinned && right.pinned) {
+			return (left.pinnedAt ?? "").localeCompare(right.pinnedAt ?? "");
+		}
 		return (right.modified ?? "").localeCompare(left.modified ?? "");
 	});
 	return merged;
@@ -1005,6 +1015,65 @@ const DASHBOARD_BASE_CSS = `
 				--ds-badge-warning-border: #5a4a2a;
 			}
 		}
+		/*
+		 * Explicit theme choice, same mechanism as the SPA (see packages/web/src/theme.ts):
+		 * persisted under one localStorage key ("pi-web-theme"), read by the inline
+		 * script in <head> (CLIENT_THEME_BOOTSTRAP_SCRIPT below) which sets
+		 * data-theme before first paint. Falls back to prefers-color-scheme above when
+		 * nothing is stored yet (e.g. first visit, or a browser with storage disabled).
+		 */
+		:root[data-theme="light"] {
+			--ds-bg: #ffffff;
+			--ds-surface: #f5f5f5;
+			--ds-surface-2: #ffffff;
+			--ds-surface-hover: #eeeeee;
+			--ds-border: #e0e0e0;
+			--ds-border-strong: #c7c7c7;
+			--ds-text: #1a1a1a;
+			--ds-text-muted: #515c6b;
+			--ds-text-dim: #5e6673;
+			--ds-accent: #245bce;
+			--ds-accent-strong: #245bce;
+			--ds-accent-bg: #245bce;
+			--ds-accent-bg-hover: #1d4ed8;
+			--ds-accent-fg: #ffffff;
+			--ds-danger: #dc2626;
+			--ds-danger-bg: #fef2f2;
+			--ds-success: #16a34a;
+			--ds-warning: #b45309;
+			--ds-placeholder: #94a3b8;
+			--ds-ns-tag-fg: #6d28d9;
+			--ds-ns-tag-border: #ddd6fe;
+			--ds-badge-success-border: #bbf7d0;
+			--ds-badge-danger-border: #fecaca;
+			--ds-badge-warning-border: #fde68a;
+		}
+		:root[data-theme="dark"] {
+			--ds-bg: #1a1a1a;
+			--ds-surface: #242424;
+			--ds-surface-2: #1a1a1a;
+			--ds-surface-hover: #2e2e2e;
+			--ds-border: #454545;
+			--ds-border-strong: #5a5a5a;
+			--ds-text: #e8e8e8;
+			--ds-text-muted: #b7b7b7;
+			--ds-text-dim: #a4a4a4;
+			--ds-accent: #a4c2f4;
+			--ds-accent-strong: #a4c2f4;
+			--ds-accent-bg: #2a4a3f;
+			--ds-accent-bg-hover: #3a6a5f;
+			--ds-accent-fg: #182234;
+			--ds-danger: #f87171;
+			--ds-danger-bg: #3a2222;
+			--ds-success: #4ade80;
+			--ds-warning: #facc15;
+			--ds-placeholder: #666;
+			--ds-ns-tag-fg: #b294bb;
+			--ds-ns-tag-border: #3a2a4a;
+			--ds-badge-success-border: #2a4a2a;
+			--ds-badge-danger-border: #4a2a2a;
+			--ds-badge-warning-border: #5a4a2a;
+		}
 		*, *::before, *::after { box-sizing: border-box; }
 		html { -webkit-text-size-adjust: 100%; color-scheme: light dark; }
 		body {
@@ -1043,7 +1112,25 @@ const DASHBOARD_BASE_CSS = `
 		}
 		:focus-visible { outline: 2px solid var(--ds-accent); outline-offset: 1px; }
 		textarea { resize: vertical; }
+		/* ---- Shared page header, same height/border as the SPA topbar (see .topbar in style.css) ---- */
+		.page-top { display: flex; align-items: center; min-height: 44px; gap: var(--ds-space-3); border-bottom: 1px solid var(--ds-border); }
+		.page-top h1 { font-size: var(--ds-font-lg); }
+		.page-nav { display: flex; align-items: center; gap: var(--ds-space-1); margin-left: auto; }
+		.page-nav-link { text-decoration: none; color: var(--ds-text-muted); font-size: var(--ds-font-base); padding: 6px 10px; border-radius: var(--ds-radius-sm); }
+		.page-nav-link:hover { background: var(--ds-surface-hover); color: var(--ds-text); }
+		.page-nav-link.active { color: var(--ds-accent); background: var(--ds-surface); }
 	`;
+
+/**
+ * Sets data-theme on <html> from the SAME localStorage key the SPA's theme
+ * toggle persists to (THEME_STORAGE_KEY in packages/web/src/theme.ts:
+ * "pi-web-theme"), so the dashboard/settings pages open in whichever
+ * light/dark choice the user last made in the app. Inline and synchronous
+ * (not a deferred module) so it runs before first paint and there is no
+ * flash of the wrong theme; falls back to the prefers-color-scheme CSS above
+ * when nothing is stored yet.
+ */
+const CLIENT_THEME_BOOTSTRAP_SCRIPT = `<script>(function(){try{var v=localStorage.getItem("pi-web-theme");if(v){document.documentElement.dataset.theme=/light/i.test(v)?"light":"dark";}}catch(e){}})();</script>`;
 
 function renderIndexPage(): string {
 	return `<!doctype html>
@@ -1060,12 +1147,13 @@ function renderIndexPage(): string {
 	<link rel="icon" href="/icons/pi.svg" type="image/svg+xml" />
 	<link rel="apple-touch-icon" href="/icons/pi-180.png" />
 	<title>pi server</title>
+	${CLIENT_THEME_BOOTSTRAP_SCRIPT}
 	<style>
 ${DASHBOARD_BASE_CSS}
 		body { max-width: 1400px; padding: var(--ds-space-6) var(--ds-space-5); }
 		.meta { margin-left: 0; }
 		/* ---- Page header + namespace bar (one integrated block, not a bolted-on strip) ---- */
-		.page-top { display: flex; align-items: center; justify-content: space-between; gap: var(--ds-space-3); padding-bottom: var(--ds-space-4); border-bottom: 1px solid var(--ds-border); margin-bottom: var(--ds-space-4); }
+		.page-top { margin-bottom: var(--ds-space-4); }
 		.page-top .btn-ghost { text-decoration: none; font-size: var(--ds-font-md); }
 		.ns-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ds-space-2); margin: 0 0 var(--ds-space-5); padding: var(--ds-space-2) var(--ds-space-3); font-size: var(--ds-font-sm); color: var(--ds-text-muted); background: var(--ds-surface); border: 1px solid var(--ds-border); border-radius: var(--ds-radius-md); }
 		.ns-bar label { font-size: var(--ds-font-sm); color: var(--ds-text-dim); }
@@ -1190,7 +1278,10 @@ ${DASHBOARD_BASE_CSS}
 <body>
 	<div class="page-top">
 		<h1>pi</h1>
-		<a href="/settings" class="select-trigger">Settings</a>
+		<nav class="page-nav">
+			<a href="/" class="page-nav-link active">Dashboard</a>
+			<a href="/settings" class="page-nav-link">Settings</a>
+		</nav>
 	</div>
 	<div class="ns-bar" id="ns-bar" style="display:none">
 		<label for="ns-select" id="ns-label">Namespace</label>
@@ -2024,12 +2115,11 @@ function renderSettingsPage(): string {
 	<meta name="theme-color" content="#ffffff" />
 	<link rel="icon" href="/icons/pi.svg" type="image/svg+xml" />
 	<title>pi settings</title>
+	${CLIENT_THEME_BOOTSTRAP_SCRIPT}
 	<style>
 ${DASHBOARD_BASE_CSS}
 		body { max-width: 760px; padding: var(--ds-space-6) var(--ds-space-5); }
-		.page-top { display: flex; align-items: center; justify-content: space-between; gap: var(--ds-space-3); padding-bottom: var(--ds-space-4); border-bottom: 1px solid var(--ds-border); margin-bottom: var(--ds-space-5); }
-		.page-top .home-link { text-decoration: none; color: var(--ds-accent); font-size: var(--ds-font-md); }
-		.page-top .home-link:hover { text-decoration: underline; }
+		.page-top { margin-bottom: var(--ds-space-5); }
 		/* ---- Form sections: cards, one concern each ---- */
 		.section { margin-top: var(--ds-space-5); padding: var(--ds-space-4); border: 1px solid var(--ds-border); border-radius: var(--ds-radius-lg); background: var(--ds-surface); }
 		.section:first-of-type { margin-top: 0; }
@@ -2071,8 +2161,11 @@ ${DASHBOARD_BASE_CSS}
 </head>
 <body>
 	<div class="page-top">
-		<h1>Settings</h1>
-		<a href="/" class="home-link">&larr; Back to dashboard</a>
+		<h1>pi</h1>
+		<nav class="page-nav">
+			<a href="/" class="page-nav-link">Dashboard</a>
+			<a href="/settings" class="page-nav-link active">Settings</a>
+		</nav>
 	</div>
 
 	<div class="section">

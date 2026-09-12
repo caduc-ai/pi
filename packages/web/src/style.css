@@ -599,6 +599,14 @@ samp {
 	white-space: nowrap;
 }
 
+.topbar-usage-ctx {
+	color: var(--text-muted);
+}
+
+.topbar-usage-tokens {
+	color: var(--text-dim);
+}
+
 .connection-dot {
 	width: 7px;
 	height: 7px;
@@ -1162,7 +1170,8 @@ samp {
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
 	margin-bottom: var(--sp-1);
-	overflow: hidden;
+	max-height: 40vh;
+	overflow-y: auto;
 	z-index: 10;
 	box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
 }
@@ -1198,13 +1207,6 @@ samp {
 	white-space: nowrap;
 }
 
-.autocomplete-scroll-info {
-	color: var(--text-dim);
-	font-size: 12px;
-	padding: 3px 10px 5px;
-	text-align: center;
-}
-
 .editor-row {
 	position: relative;
 	display: flex;
@@ -1214,6 +1216,9 @@ samp {
 	border-radius: var(--radius-lg);
 	padding: var(--sp-2) var(--sp-2);
 	background: var(--bg);
+	/* Shared height for every composer control (textarea min-height, buttons) so
+	   the snippet button, textarea, and send/abort button all line up. */
+	--composer-control-height: 32px;
 	transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
@@ -1224,6 +1229,7 @@ samp {
 
 .editor-input {
 	flex: 1;
+	box-sizing: border-box;
 	background: transparent;
 	border: 0;
 	outline: none;
@@ -1231,6 +1237,7 @@ samp {
 	color: var(--text);
 	font: inherit;
 	line-height: 1.45;
+	min-height: var(--composer-control-height);
 	max-height: 200px;
 	padding: var(--sp-1) var(--sp-1);
 }
@@ -1242,7 +1249,10 @@ samp {
 .editor-button {
 	display: inline-flex;
 	align-items: center;
+	justify-content: center;
 	gap: 5px;
+	box-sizing: border-box;
+	height: var(--composer-control-height);
 	background: var(--accent);
 	border: 1px solid var(--accent);
 	border-radius: var(--radius-md);
@@ -1250,7 +1260,7 @@ samp {
 	font: inherit;
 	font-weight: 600;
 	cursor: pointer;
-	padding: var(--sp-2) var(--sp-3);
+	padding: 0 var(--sp-3);
 	flex-shrink: 0;
 	transition: background-color 0.12s ease, border-color 0.12s ease;
 }
@@ -1274,9 +1284,10 @@ samp {
 	background: transparent;
 	border-color: var(--border);
 	color: var(--text-muted);
-	font-size: 12px;
+	font-size: 13px;
 	font-weight: 400;
-	padding: 4px 8px;
+	width: var(--composer-control-height);
+	padding: 0;
 }
 
 .editor-button.snippets.active,
@@ -1315,7 +1326,7 @@ samp {
 }
 
 .snippet-list {
-	max-height: 240px;
+	max-height: 40vh;
 	overflow-y: auto;
 }
 
@@ -1434,16 +1445,6 @@ samp {
 
 .status-strip-btn:hover {
 	color: var(--text);
-}
-
-.theme-toggle {
-	background: transparent;
-	border: 0;
-	color: var(--text-dim);
-	font: inherit;
-	cursor: pointer;
-	padding: 0;
-	max-width: 8em;
 }
 
 .working-indicator {
@@ -1840,6 +1841,11 @@ samp {
 		display: none;
 	}
 
+	/* Only cost + context% on mobile; input/output token counts are secondary. */
+	.topbar-usage-tokens {
+		display: none;
+	}
+
 	/* Popovers anchored to the composer must stay within a narrow viewport
 	   instead of relying on the desktop's generous left/right margins. */
 	.autocomplete,
@@ -1870,13 +1876,16 @@ samp {
 /* Touch devices: larger tap targets, 16px inputs (avoids iOS auto-zoom-on-focus),
    send via button rather than Enter. */
 @media (pointer: coarse) {
+	.editor-row {
+		--composer-control-height: 40px;
+	}
+
 	.editor-input {
 		font-size: 16px;
 	}
 
 	.editor-button {
-		padding: 8px 14px;
-		min-height: var(--tap-min);
+		padding: 0 14px;
 	}
 
 	.topbar-icon-btn,
@@ -1937,13 +1946,34 @@ samp {
    ========================================================================== */
 
 .terminal-panel {
+	position: relative;
 	background: var(--pi-cardBg);
 	border-top: 1px solid var(--border);
 	display: flex;
 	flex-direction: column;
-	/* Roughly half the viewport, so the chat stays usable alongside it. */
+	/* Roughly half the viewport by default; user-dragged height (see
+	   terminal-resize-handle) overrides this via an inline style. */
 	height: 45vh;
 	min-height: 180px;
+}
+
+.terminal-resize-handle {
+	position: absolute;
+	top: -4px;
+	left: 0;
+	right: 0;
+	height: 8px;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	cursor: row-resize;
+	touch-action: none;
+	z-index: 6;
+}
+
+.terminal-resize-handle:hover,
+.terminal-resize-handle:active {
+	background: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .terminal-header {

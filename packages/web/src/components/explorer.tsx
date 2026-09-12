@@ -25,16 +25,30 @@ export const openFileContent = signal<string | undefined>(undefined);
 export const openFileError = signal<string | undefined>(undefined);
 export const openFileLoading = signal(false);
 
+/**
+ * Explorer endpoints are absolute (`${basePath}...`, e.g. `/i/<id>/files?path=`)
+ * so they always hit pi-server's instance-scoped routes rather than resolving
+ * relative to whatever path the SPA happens to be on. A non-JSON response
+ * (e.g. an HTML error page from an unrelated proxy/gateway in front of the
+ * server) is reported as a friendly message instead of a raw JSON parse error.
+ */
 async function fetchJson<T>(path: string): Promise<{ data?: T; error?: string }> {
 	try {
 		const response = await fetch(`${basePath}${path}`, { cache: "no-store" });
+		if (!response.ok) {
+			return { error: `Failed to load (HTTP ${response.status})` };
+		}
+		const contentType = response.headers.get("content-type") ?? "";
+		if (!contentType.includes("application/json")) {
+			return { error: "Unexpected response from server" };
+		}
 		const data = (await response.json()) as ({ ok?: boolean; error?: string } & T) | undefined;
 		if (!data || data.ok === false) {
 			return { error: data?.error ?? `HTTP ${response.status}` };
 		}
 		return { data };
-	} catch (error) {
-		return { error: error instanceof Error ? error.message : String(error) };
+	} catch {
+		return { error: "Failed to reach the server" };
 	}
 }
 

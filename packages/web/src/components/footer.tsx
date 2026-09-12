@@ -8,7 +8,6 @@ import {
 	statusEntries,
 	workingMessage,
 } from "../state.ts";
-import { applyTheme, availableThemes, themeName } from "../theme.ts";
 
 function formatTokens(count: number): string {
 	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
@@ -19,8 +18,9 @@ function formatTokens(count: number): string {
 /**
  * Bottom status strip, pinned under the composer: current model (click cycles
  * the model picker), thinking level (click cycles it), a Compact shortcut
- * when the session exposes /compact, session cost/tokens, and the theme
- * select. Replaces the old plain-text footer with the same underlying data.
+ * when the session exposes /compact, and session cost/tokens. Theme switching
+ * lives in the topbar toggle (see app.tsx ThemeToggle) - keeping a single
+ * control avoids two dark/light toggles disagreeing with each other.
  */
 export function StatusStrip() {
 	const state = sessionState.value;
@@ -77,20 +77,6 @@ export function StatusStrip() {
 				<span class="status-strip-right">
 					{sessionStats && <span title="Session cost">${sessionStats.cost.toFixed(4)}</span>}
 					{sessionStats && <span title="Total tokens">{formatTokens(sessionStats.tokens.total)}</span>}
-					<select
-						class="theme-toggle"
-						title="Theme"
-						value={themeName.value}
-						onChange={(event) => {
-							void applyTheme((event.target as HTMLSelectElement).value);
-						}}
-					>
-						{availableThemes.value.map((name) => (
-							<option key={name} value={name}>
-								{name}
-							</option>
-						))}
-					</select>
 				</span>
 			</div>
 		</footer>

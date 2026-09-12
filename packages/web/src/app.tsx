@@ -27,10 +27,24 @@ import {
 } from "./state.ts";
 import { applyTheme, themeName } from "./theme.ts";
 
-function formatTokens(count: number): string {
-	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-	if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
-	return String(count);
+/** At most 3 significant digits: 241k, 1.2M, 12.3k, 999. */
+function formatCompactNumber(value: number): string {
+	const abs = Math.abs(value);
+	if (abs < 1000) return String(Math.round(value));
+	const units: Array<[number, string]> = [
+		[1_000_000_000, "B"],
+		[1_000_000, "M"],
+		[1_000, "k"],
+	];
+	for (const [threshold, suffix] of units) {
+		if (abs >= threshold) {
+			const scaled = value / threshold;
+			const intDigits = Math.floor(Math.log10(Math.abs(scaled))) + 1;
+			const decimals = Math.max(0, Math.min(2, 3 - intDigits));
+			return `${scaled.toFixed(decimals)}${suffix}`;
+		}
+	}
+	return String(Math.round(value));
 }
 
 function ThemeToggle() {
@@ -72,19 +86,25 @@ function UsageStats() {
 	const sessionStats = stats.value;
 	if (!sessionStats) return null;
 	const context = sessionStats.contextUsage;
+	const hasContext = context && context.percent !== null && context.percent !== undefined;
+	const inOutTitle =
+		sessionStats.tokens.cacheRead > 0
+			? `${formatCompactNumber(sessionStats.tokens.input)} in · ${formatCompactNumber(sessionStats.tokens.output)} out · ${formatCompactNumber(sessionStats.tokens.cacheRead)} cache read`
+			: `${formatCompactNumber(sessionStats.tokens.input)} in · ${formatCompactNumber(sessionStats.tokens.output)} out`;
 	return (
 		<span class="topbar-usage">
-			<span title="Input tokens">↑{formatTokens(sessionStats.tokens.input)}</span>
-			<span title="Output tokens">↓{formatTokens(sessionStats.tokens.output)}</span>
-			{sessionStats.tokens.cacheRead > 0 && (
-				<span title="Cache read tokens">⟳{formatTokens(sessionStats.tokens.cacheRead)}</span>
-			)}
 			<span title="Session cost">${sessionStats.cost.toFixed(2)}</span>
-			{context && context.percent !== null && context.percent !== undefined && (
-				<span title={`${context.tokens ?? "?"} / ${context.contextWindow} tokens`}>
-					⌂{context.percent}%/{formatTokens(context.contextWindow)}
+			{hasContext && context && (
+				<span
+					class="topbar-usage-ctx"
+					title={`${context.tokens !== null ? formatCompactNumber(context.tokens) : "?"} / ${formatCompactNumber(context.contextWindow)} tokens`}
+				>
+					{Math.round(context.percent ?? 0)}% ctx
 				</span>
 			)}
+			<span class="topbar-usage-tokens" title={inOutTitle}>
+				{formatCompactNumber(sessionStats.tokens.input)} in · {formatCompactNumber(sessionStats.tokens.output)} out
+			</span>
 		</span>
 	);
 }
@@ -246,12 +266,15 @@ export function App() {
 			<div class="main">
 				<TopBar />
 				<div class="main-content">
-					{activePanel.value === "subagents" ? (
+					{/* Opening a file always wins: it should never be a silent no-op while the
+					   subagents panel or TUI happens to be showing. Closing the viewer (openFilePath
+					   cleared) reveals whichever of those was active underneath, unchanged. */}
+					{openFilePath.value ? (
+						<FileViewer />
+					) : activePanel.value === "subagents" ? (
 						<SubagentsPanel />
 					) : tuiActive.value ? (
 						<TuiView />
-					) : openFilePath.value ? (
-						<FileViewer />
 					) : (
 						<>
 							<ChatList />

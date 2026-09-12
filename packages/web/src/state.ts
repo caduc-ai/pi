@@ -780,6 +780,9 @@ export interface SidebarSessionSummary {
 	name: string;
 	status: string;
 	pinned: boolean;
+	// Sort key for the pinned group (ascending, i.e. first-pinned-first); see
+	// listDashboardSessions in packages/server/src/web.ts. undefined when unpinned.
+	pinnedAt?: string;
 	messageCount?: number;
 	// ISO timestamp of the session's last activity, if known.
 	modified?: string;
@@ -817,6 +820,7 @@ export async function refreshSidebarSessions(): Promise<void> {
 				name: string;
 				status: string;
 				pinned: boolean;
+				pinnedAt?: string;
 				namespace?: string;
 				messageCount?: number;
 				modified?: string;
@@ -831,14 +835,18 @@ export async function refreshSidebarSessions(): Promise<void> {
 				name: string;
 				status: string;
 				pinned: boolean;
+				pinnedAt?: string;
 				namespace?: string;
 				messageCount?: number;
 				modified?: string;
 			} => Boolean(session.id) && (session.status === "online" || session.status === "starting"),
 		);
-		// Pinned first, otherwise most-recently-active first.
+		// Pinned first, as a FIXED group ordered by pinnedAt ascending (never by
+		// last-accessed, so using a pinned session doesn't reorder it). Everyone
+		// else stays most-recently-active first.
 		live.sort((a, b) => {
 			if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+			if (a.pinned && b.pinned) return (a.pinnedAt ?? "").localeCompare(b.pinnedAt ?? "");
 			return (b.modified ?? "").localeCompare(a.modified ?? "");
 		});
 		sidebarSessions.value = live.map((session) => ({
@@ -846,6 +854,7 @@ export async function refreshSidebarSessions(): Promise<void> {
 			name: session.name,
 			status: session.status,
 			pinned: session.pinned,
+			pinnedAt: session.pinnedAt,
 			namespace: session.namespace,
 			messageCount: session.messageCount,
 			modified: session.modified,
