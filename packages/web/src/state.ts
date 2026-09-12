@@ -17,6 +17,12 @@ import type {
 	ToolResultLike,
 	ToolResultMessage,
 } from "./protocol.ts";
+import {
+	ASYNC_STATUS_SNAPSHOT_WIDGET_PREFIX,
+	type AsyncStatusSnapshot,
+	countRunningNodes,
+	parseAsyncStatusSnapshotWidgetLine,
+} from "./subagent-status.ts";
 
 export interface ToolDisplayState {
 	name: string;
@@ -60,6 +66,17 @@ export const dialogQueue = signal<RpcExtensionUIRequest[]>([]);
 export const statusEntries = signal<Record<string, string>>({});
 export const widgets = signal<Record<string, Widget>>({});
 export const editorText = signal("");
+
+/**
+ * Latest parsed pi-subagents live status snapshot (see subagent-status.ts),
+ * extracted out of whichever widget line carries the
+ * PI_SUBAGENT_ASYNC_JSON: prefix. That line is never stored in `widgets` -
+ * WidgetArea only ever sees free-text widget lines. A malformed snapshot line
+ * is dropped silently and the last good snapshot is kept.
+ */
+export const subagentSnapshot = signal<AsyncStatusSnapshot | undefined>(undefined);
+/** Key of the widget currently supplying subagentSnapshot, so clearing that specific widget clears the snapshot too. */
+let subagentSnapshotWidgetKey: string | undefined;
 
 let nextToastId = 1;
 
@@ -495,12 +512,38 @@ function handleUiRequest(request: RpcExtensionUIRequest): void {
 		case "setWidget": {
 			const next = { ...widgets.value };
 			if (request.widgetLines) {
-				next[request.widgetKey] = {
-					lines: request.widgetLines,
-					placement: request.widgetPlacement ?? "aboveEditor",
-				};
+				// Pull out the async status snapshot line, if any, instead of displaying
+				// its raw JSON: the rest of the widget's lines (if it has any) still
+				// render normally.
+				const displayLines: string[] = [];
+				for (const line of request.widgetLines) {
+					const snapshot = parseAsyncStatusSnapshotWidgetLine(line);
+					if (snapshot) {
+						subagentSnapshot.value = snapshot;
+						subagentSnapshotWidgetKey = request.widgetKey;
+						continue;
+					}
+					if (line.startsWith(ASYNC_STATUS_SNAPSHOT_WIDGET_PREFIX)) {
+						// Malformed snapshot JSON: drop the raw line rather than showing it,
+						// keep whatever snapshot we already had.
+						continue;
+					}
+					displayLines.push(line);
+				}
+				if (displayLines.length > 0) {
+					next[request.widgetKey] = {
+						lines: displayLines,
+						placement: request.widgetPlacement ?? "aboveEditor",
+					};
+				} else {
+					delete next[request.widgetKey];
+				}
 			} else {
 				delete next[request.widgetKey];
+				if (subagentSnapshotWidgetKey === request.widgetKey) {
+					subagentSnapshot.value = undefined;
+					subagentSnapshotWidgetKey = undefined;
+				}
 			}
 			widgets.value = next;
 			break;
@@ -635,11 +678,73 @@ export const subagentRuns = signal<SubagentRunSummary[]>([]);
 export const selectedRunKey = signal<string | undefined>(undefined);
 export const subagentView = signal<SubagentView>("transcript");
 export const subagentFile = signal<SubagentFileData | undefined>(undefined);
+/** True when the last transcript/output/file fetch failed (fetchSubagentJson already toasted); drives an inline retry state instead of leaving the pane blank. */
+export const subagentFileError = signal(false);
 export const subagentLoading = signal(false);
 export const subagentPolling = signal(false);
 
 export function toggleSubagentsPanel(): void {
 	activePanel.value = activePanel.value === "subagents" ? "chat" : "subagents";
+}
+
+// ============================================================================
+// Agents rail (live subagent activity beside the chat, see agents-rail.tsx)
+// ============================================================================
+
+const AGENTS_RAIL_STORAGE_KEY = "pi-web:agents-rail-open";
+
+function loadStoredAgentsRailOpen(): boolean | undefined {
+	try {
+		const raw = localStorage.getItem(AGENTS_RAIL_STORAGE_KEY);
+		if (raw === "true") return true;
+		if (raw === "false") return false;
+		return undefined;
+	} catch {
+		// Storage unavailable (private mode, disabled cookies, ...): fall back to closed.
+		return undefined;
+	}
+}
+
+const storedAgentsRailOpen = loadStoredAgentsRailOpen();
+export const agentsRailOpen = signal(storedAgentsRailOpen ?? false);
+// Skip auto-open once the user has an explicit stored preference either way.
+let agentsRailAutoOpened = storedAgentsRailOpen !== undefined;
+
+export function toggleAgentsRail(): void {
+	agentsRailOpen.value = !agentsRailOpen.value;
+	try {
+		localStorage.setItem(AGENTS_RAIL_STORAGE_KEY, String(agentsRailOpen.value));
+	} catch {
+		// Best-effort; the toggle still works for the current page load.
+	}
+}
+
+// Auto-reveal the rail the first time live subagent activity shows up, so a
+// user who never touched the toggle still notices background work starting.
+effect(() => {
+	if (agentsRailAutoOpened) return;
+	if (countRunningNodes(subagentSnapshot.value) > 0) {
+		agentsRailAutoOpened = true;
+		agentsRailOpen.value = true;
+	}
+});
+
+/**
+ * Jump from an agents rail node into the existing Subagents panel, focused on
+ * the matching run. Snapshot node ids come from pi-subagents' own asyncId,
+ * which the server's subagent run summaries expose as `runId` (async runs)
+ * or embed in `key` as `async:<runId>`; foreground (non-async) runs never
+ * appear in the snapshot, so this only ever matches async/background runs.
+ * If no run list entry matches yet (e.g. it hasn't been fetched), this still
+ * opens the panel so the user isn't left looking at nothing.
+ */
+export async function focusSubagentRun(nodeId: string): Promise<void> {
+	activePanel.value = "subagents";
+	await refreshSubagents();
+	const match = subagentRuns.value.find((run) => run.runId === nodeId || run.key === `async:${nodeId}`);
+	if (match) {
+		await selectSubagentRun(match.key);
+	}
 }
 
 /**
@@ -702,9 +807,11 @@ async function fetchAndSetSubagentFile(key: string | undefined, view: SubagentVi
 	const target = { key, view, path };
 	latestSubagentFileRequest = target;
 	subagentLoading.value = true;
+	subagentFileError.value = false;
 	const data = await fetchSubagentJson<SubagentFileData>(`subagents/file?path=${encodeURIComponent(path)}`);
 	if (latestSubagentFileRequest !== target) return;
 	subagentFile.value = data;
+	subagentFileError.value = data === undefined;
 	subagentLoading.value = false;
 }
 
@@ -746,6 +853,11 @@ export async function setSubagentView(view: SubagentView): Promise<void> {
 export async function selectSubagentOutput(path: string): Promise<void> {
 	subagentFile.value = undefined;
 	await fetchAndSetSubagentFile(selectedRunKey.value, "outputs", path);
+}
+
+/** Retry after a failed transcript/output/file fetch (subagentFileError), re-running the same fetch loadSelectedSubagentFile would have made for the current run/view. */
+export async function retrySubagentFile(): Promise<void> {
+	await loadSelectedSubagentFile();
 }
 
 let subagentPollTimer: ReturnType<typeof setInterval> | undefined;

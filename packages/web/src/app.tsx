@@ -1,3 +1,4 @@
+import { AgentsRail } from "./components/agents-rail.tsx";
 import { ChatList } from "./components/chat-list.tsx";
 import { DialogHost, ToastHost } from "./components/dialogs.tsx";
 import { Editor } from "./components/editor.tsx";
@@ -10,6 +11,7 @@ import { SubagentsPanel } from "./components/subagents.tsx";
 import { TerminalView, TuiView } from "./components/terminal.tsx";
 import {
 	activePanel,
+	agentsRailOpen,
 	commandResult,
 	connected,
 	currentNamespace,
@@ -19,12 +21,15 @@ import {
 	sidebarOpen,
 	stats,
 	subagentRuns,
+	subagentSnapshot,
 	terminalOpen,
+	toggleAgentsRail,
 	toggleSubagentsPanel,
 	toggleTui,
 	tuiActive,
 	widgets,
 } from "./state.ts";
+import { countRunningNodes } from "./subagent-status.ts";
 import { applyTheme, themeName } from "./theme.ts";
 
 /** At most 3 significant digits: 241k, 1.2M, 12.3k, 999. */
@@ -176,6 +181,22 @@ function TopBar() {
 				</button>
 				<button
 					type="button"
+					class={`topbar-btn ${agentsRailOpen.value ? "active" : ""}`}
+					title="Toggle live agents panel"
+					onClick={toggleAgentsRail}
+				>
+					<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+						<title>Agents</title>
+						<rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" stroke-width="1.2" />
+						<path d="M5 6.5h6M5 9.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+					</svg>
+					<span class="topbar-btn-label">Agents</span>
+					{countRunningNodes(subagentSnapshot.value) > 0 ? (
+						<span class="topbar-btn-count">{countRunningNodes(subagentSnapshot.value)}</span>
+					) : null}
+				</button>
+				<button
+					type="button"
 					class={`topbar-btn ${terminalOpen.value ? "active" : ""}`}
 					title="Toggle terminal"
 					onClick={() => {
@@ -265,25 +286,28 @@ export function App() {
 			<Sidebar />
 			<div class="main">
 				<TopBar />
-				<div class="main-content">
-					{/* Opening a file always wins: it should never be a silent no-op while the
-					   subagents panel or TUI happens to be showing. Closing the viewer (openFilePath
-					   cleared) reveals whichever of those was active underneath, unchanged. */}
-					{openFilePath.value ? (
-						<FileViewer />
-					) : activePanel.value === "subagents" ? (
-						<SubagentsPanel />
-					) : tuiActive.value ? (
-						<TuiView />
-					) : (
-						<>
-							<ChatList />
-							<CommandResultCard />
-							<WidgetArea placement="aboveEditor" />
-							<Editor />
-							<WidgetArea placement="belowEditor" />
-						</>
-					)}
+				<div class="main-content-row">
+					<div class="main-content">
+						{/* Opening a file always wins: it should never be a silent no-op while the
+						   subagents panel or TUI happens to be showing. Closing the viewer (openFilePath
+						   cleared) reveals whichever of those was active underneath, unchanged. */}
+						{openFilePath.value ? (
+							<FileViewer />
+						) : activePanel.value === "subagents" ? (
+							<SubagentsPanel />
+						) : tuiActive.value ? (
+							<TuiView />
+						) : (
+							<>
+								<ChatList />
+								<CommandResultCard />
+								<WidgetArea placement="aboveEditor" />
+								<Editor />
+								<WidgetArea placement="belowEditor" />
+							</>
+						)}
+					</div>
+					<AgentsRail />
 				</div>
 				<TerminalView />
 				<StatusStrip />
