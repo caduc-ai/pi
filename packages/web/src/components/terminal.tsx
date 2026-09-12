@@ -300,45 +300,46 @@ function clampTerminalHeight(height: number): number {
 	return Math.min(Math.max(height, TERMINAL_MIN_HEIGHT), window.innerHeight - 120);
 }
 
-function terminalPointerY(event: MouseEvent | TouchEvent): number {
-	return "touches" in event ? (event.touches[0]?.clientY ?? 0) : (event as MouseEvent).clientY;
-}
-
 /** Drag handle on the terminal panel's top edge; dragging up (smaller clientY) grows the panel. */
 function TerminalResizeHandle({ panelRef }: { panelRef: RefObject<HTMLDivElement | null> }) {
-	const startResize = (event: MouseEvent | TouchEvent) => {
+	const startResize = (event: PointerEvent) => {
 		event.preventDefault();
-		const startY = terminalPointerY(event);
+		const handle = event.currentTarget as HTMLButtonElement;
+		handle.setPointerCapture(event.pointerId);
+		const startY = event.clientY;
 		const startHeight = panelRef.current?.getBoundingClientRect().height ?? clampTerminalHeight(400);
+		document.body.classList.add("terminal-resizing");
 
-		const onMove = (moveEvent: MouseEvent | TouchEvent) => {
-			moveEvent.preventDefault();
-			const delta = startY - terminalPointerY(moveEvent);
-			terminalHeight.value = clampTerminalHeight(startHeight + delta);
+		const onMove = (moveEvent: PointerEvent) => {
+			if (moveEvent.pointerId !== event.pointerId) return;
+			terminalHeight.value = clampTerminalHeight(startHeight + startY - moveEvent.clientY);
 		};
-		const onEnd = () => {
-			window.removeEventListener("mousemove", onMove);
-			window.removeEventListener("mouseup", onEnd);
-			window.removeEventListener("touchmove", onMove);
-			window.removeEventListener("touchend", onEnd);
+		const onEnd = (endEvent: PointerEvent) => {
+			if (endEvent.pointerId !== event.pointerId) return;
+			handle.removeEventListener("pointermove", onMove);
+			handle.removeEventListener("pointerup", onEnd);
+			handle.removeEventListener("pointercancel", onEnd);
+			document.body.classList.remove("terminal-resizing");
 			if (terminalHeight.value !== undefined) {
-				localStorage.setItem(TERMINAL_HEIGHT_STORAGE_KEY, String(terminalHeight.value));
+				try {
+					localStorage.setItem(TERMINAL_HEIGHT_STORAGE_KEY, String(terminalHeight.value));
+				} catch {
+					// Resizing still works when storage is unavailable.
+				}
 			}
 		};
-		window.addEventListener("mousemove", onMove);
-		window.addEventListener("mouseup", onEnd);
-		window.addEventListener("touchmove", onMove, { passive: false });
-		window.addEventListener("touchend", onEnd);
+		handle.addEventListener("pointermove", onMove);
+		handle.addEventListener("pointerup", onEnd);
+		handle.addEventListener("pointercancel", onEnd);
 	};
 
 	return (
 		<button
 			type="button"
 			class="terminal-resize-handle"
-			title="Drag to resize"
+			title="Drag to resize terminal"
 			aria-label="Resize terminal panel"
-			onMouseDown={startResize}
-			onTouchStart={startResize}
+			onPointerDown={startResize}
 		/>
 	);
 }

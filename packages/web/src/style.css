@@ -1957,6 +1957,7 @@ samp {
 	background: var(--pi-cardBg);
 	border-top: 1px solid var(--border);
 	display: flex;
+	flex: 0 0 auto;
 	flex-direction: column;
 	/* Roughly half the viewport by default; user-dragged height (see
 	   terminal-resize-handle) overrides this via an inline style. */
@@ -1965,22 +1966,41 @@ samp {
 }
 
 .terminal-resize-handle {
-	position: absolute;
-	top: -4px;
-	left: 0;
-	right: 0;
-	height: 8px;
-	padding: 0;
-	border: 0;
 	background: transparent;
+	border: 0;
 	cursor: row-resize;
+	height: 12px;
+	left: 0;
+	padding: 0;
+	position: absolute;
+	right: 0;
+	top: -6px;
 	touch-action: none;
 	z-index: 6;
 }
 
-.terminal-resize-handle:hover,
-.terminal-resize-handle:active {
-	background: color-mix(in srgb, var(--accent) 35%, transparent);
+.terminal-resize-handle::after {
+	background: var(--border);
+	border-radius: 2px;
+	content: "";
+	height: 2px;
+	left: 50%;
+	position: absolute;
+	top: 5px;
+	transform: translateX(-50%);
+	transition: background-color 0.12s ease, width 0.12s ease;
+	width: 48px;
+}
+
+.terminal-resize-handle:hover::after,
+.terminal-resize-handle:active::after {
+	background: var(--accent);
+	width: 72px;
+}
+
+body.terminal-resizing {
+	cursor: row-resize;
+	user-select: none;
 }
 
 .terminal-header {
