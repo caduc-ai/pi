@@ -965,29 +965,43 @@ export async function selectModel(provider: string, modelId: string): Promise<vo
 	await sync();
 }
 
-const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
-/** `/thinking <level>` sets it; bare `/thinking` cycles to the next level. */
+/**
+ * `/thinking <level>` sets it; bare `/thinking` cycles to the next level.
+ * Levels come from the server per model: e.g. Claude Fable can't be set to
+ * "off" and some models lack xhigh/max, and the session silently clamps
+ * unsupported requests - so validate against the real list instead of a
+ * hardcoded one, and let the server do the cycling.
+ */
 export async function setThinkingLevelCommand(args: string): Promise<void> {
-	const current = sessionState.value?.thinkingLevel ?? "medium";
-	let level: ThinkingLevel;
-	if (args) {
-		const wanted = args.toLowerCase();
-		if (!THINKING_LEVELS.includes(wanted as ThinkingLevel)) {
-			pushToast(`Unknown thinking level "${args}" (use ${THINKING_LEVELS.join(", ")})`, "error");
+	if (!args) {
+		const response = await client.command({ type: "cycle_thinking_level" });
+		if (!response.success) {
+			reportFailure(response, "Failed to change thinking level");
 			return;
 		}
-		level = wanted as ThinkingLevel;
-	} else {
-		level = THINKING_LEVELS[(THINKING_LEVELS.indexOf(current) + 1) % THINKING_LEVELS.length];
+		const data = dataAs<{ level: ThinkingLevel } | null>(response, "cycle_thinking_level");
+		if (!data) {
+			pushToast("This model does not support thinking levels", "info");
+			return;
+		}
+		if (sessionState.value) sessionState.value = { ...sessionState.value, thinkingLevel: data.level };
+		pushToast(`Thinking level: ${data.level}`, "info");
+		return;
 	}
-	const response = await client.command({ type: "set_thinking_level", level });
+	const available = await client.command({ type: "get_available_thinking_levels" });
+	const levels = dataAs<{ levels: ThinkingLevel[] }>(available, "get_available_thinking_levels")?.levels ?? [];
+	const wanted = args.toLowerCase() as ThinkingLevel;
+	if (!levels.includes(wanted)) {
+		pushToast(`"${args}" is not available for this model (use ${levels.join(", ") || "off"})`, "error");
+		return;
+	}
+	const response = await client.command({ type: "set_thinking_level", level: wanted });
 	if (!response.success) {
 		reportFailure(response, "Failed to set thinking level");
 		return;
 	}
-	if (sessionState.value) sessionState.value = { ...sessionState.value, thinkingLevel: level };
-	pushToast(`Thinking level: ${level}`, "info");
+	if (sessionState.value) sessionState.value = { ...sessionState.value, thinkingLevel: wanted };
+	pushToast(`Thinking level: ${wanted}`, "info");
 }
 
 /**
