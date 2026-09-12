@@ -563,7 +563,17 @@ export function Editor() {
 					</button>
 				) : null}
 				<button type="button" class="editor-button send" title="Send" onClick={() => void send()}>
-					▲
+					<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+						<title>Send</title>
+						<path
+							d="M3 8h10M9 4l4 4-4 4"
+							stroke="currentColor"
+							stroke-width="1.6"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						/>
+					</svg>
+					Send
 				</button>
 			</div>
 		</div>

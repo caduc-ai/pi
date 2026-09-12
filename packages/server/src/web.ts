@@ -9,6 +9,8 @@
  * - WS  /i/<id>/ws            RPC protocol stream for that instance
  * - GET /i/<id>/subagents     subagent runs for that instance (pi-subagents artifacts)
  * - GET /i/<id>/subagents/file?path=<rel>  a subagent transcript/output artifact
+ * - GET /i/<id>/files?path=<rel>           read-only directory listing under that instance's cwd
+ * - GET /i/<id>/files/content?path=<rel>   read-only file content (text files ≤ 512KB)
  * - GET /review               cranium code review UI
  * - GET /themes, /theme/*     TUI theme files, shared by all instances
  * - GET  /api/dashboard-sessions       merged live/stopped/past session list (dashboard), tagged by namespace
@@ -541,6 +543,156 @@ function resolveSubagentArtifact(cwd: string, sessionFile: string | undefined, r
 	return resolveWithinBase(path.join(cwd, ".pi-subagents"), relative);
 }
 
+// ============================================================================
+// Read-only file explorer (GET /i/<id>/files, GET /i/<id>/files/content)
+// Scoped strictly to the instance's cwd; every path is resolved and prefix-
+// checked against it (see resolveWithinExplorerRoot) before any fs access.
+// ============================================================================
+
+const EXPLORER_MAX_ENTRIES = 500;
+const EXPLORER_MAX_FILE_BYTES = 512 * 1024;
+const EXPLORER_SKIPPED_NAMES = new Set(["node_modules", ".git"]);
+
+const EXPLORER_TEXT_EXTENSIONS = new Set([
+	".js",
+	".jsx",
+	".ts",
+	".tsx",
+	".mjs",
+	".cjs",
+	".json",
+	".jsonc",
+	".md",
+	".mdx",
+	".txt",
+	".css",
+	".scss",
+	".less",
+	".html",
+	".htm",
+	".xml",
+	".yml",
+	".yaml",
+	".toml",
+	".ini",
+	".cfg",
+	".conf",
+	".sh",
+	".bash",
+	".zsh",
+	".fish",
+	".py",
+	".rb",
+	".go",
+	".rs",
+	".java",
+	".kt",
+	".c",
+	".cc",
+	".cpp",
+	".h",
+	".hpp",
+	".cs",
+	".php",
+	".sql",
+	".graphql",
+	".vue",
+	".svelte",
+	".env",
+	".csv",
+	".log",
+	".lock",
+	".gradle",
+	".properties",
+]);
+
+const EXPLORER_TEXT_BASENAMES = new Set([
+	"dockerfile",
+	"makefile",
+	"license",
+	"readme",
+	"changelog",
+	"authors",
+	"contributing",
+	".gitignore",
+	".gitattributes",
+	".npmrc",
+	".env",
+	".editorconfig",
+]);
+
+function isExplorerTextFile(filePath: string): boolean {
+	if (EXPLORER_TEXT_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return true;
+	return EXPLORER_TEXT_BASENAMES.has(path.basename(filePath).toLowerCase());
+}
+
+/** Resolve a relative explorer path against an instance's cwd, rejecting any escape (../, symlink-free path.resolve check). */
+function resolveWithinExplorerRoot(cwd: string, relative: string): string | undefined {
+	const base = path.resolve(cwd);
+	const resolved = path.resolve(base, relative || ".");
+	if (resolved !== base && !resolved.startsWith(base + path.sep)) return undefined;
+	return resolved;
+}
+
+interface ExplorerEntry {
+	name: string;
+	type: "dir" | "file";
+	size?: number;
+}
+
+type ExplorerResult<T> = ({ ok: true } & T) | { ok: false; error: string };
+
+function listExplorerDir(cwd: string, relative: string): ExplorerResult<{ entries: ExplorerEntry[] }> {
+	const dirPath = resolveWithinExplorerRoot(cwd, relative);
+	if (!dirPath) return { ok: false, error: "Path escapes the working directory" };
+	let names: string[];
+	try {
+		if (!fs.statSync(dirPath).isDirectory()) return { ok: false, error: "Not a directory" };
+		names = fs.readdirSync(dirPath).sort((a, b) => a.localeCompare(b));
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : String(error) };
+	}
+	const dirs: ExplorerEntry[] = [];
+	const files: ExplorerEntry[] = [];
+	for (const name of names) {
+		if (EXPLORER_SKIPPED_NAMES.has(name)) continue;
+		if (dirs.length + files.length >= EXPLORER_MAX_ENTRIES) break;
+		let entryStat: fs.Stats;
+		try {
+			entryStat = fs.statSync(path.join(dirPath, name));
+		} catch {
+			continue;
+		}
+		if (entryStat.isDirectory()) {
+			dirs.push({ name, type: "dir" });
+		} else if (entryStat.isFile()) {
+			files.push({ name, type: "file", size: entryStat.size });
+		}
+	}
+	return { ok: true, entries: [...dirs, ...files] };
+}
+
+function readExplorerFile(cwd: string, relative: string): ExplorerResult<{ content: string }> {
+	const filePath = resolveWithinExplorerRoot(cwd, relative);
+	if (!filePath) return { ok: false, error: "Path escapes the working directory" };
+	let stat: fs.Stats;
+	try {
+		stat = fs.statSync(filePath);
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : String(error) };
+	}
+	if (!stat.isFile()) return { ok: false, error: "Not a file" };
+	if (stat.size > EXPLORER_MAX_FILE_BYTES) {
+		return { ok: false, error: `File too large (${stat.size} bytes, limit ${EXPLORER_MAX_FILE_BYTES})` };
+	}
+	if (!isExplorerTextFile(filePath)) return { ok: false, error: "Not a text file" };
+	try {
+		return { ok: true, content: fs.readFileSync(filePath, "utf-8") };
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
 function escapeHtml(text: string): string {
 	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -799,29 +951,64 @@ const DASHBOARD_BASE_CSS = `
 			--ds-font-base: 13px;
 			--ds-font-md: 14px;
 			--ds-font-lg: 17px;
-			--ds-bg: #0d0d0d;
-			--ds-surface: #121212;
-			--ds-surface-2: #1a1a1a;
-			--ds-surface-hover: #242428;
-			--ds-border: #2a2a2a;
-			--ds-border-strong: #3a3a3a;
-			--ds-text: #e6e6e6;
-			--ds-text-muted: #999;
-			--ds-text-dim: #666;
-			--ds-accent: #8abeb7;
-			--ds-accent-strong: #3a6a5f;
-			--ds-accent-bg: #2a4a3f;
-			--ds-accent-bg-hover: #3a6a5f;
-			--ds-danger: #e06060;
-			--ds-danger-bg: #3a2222;
-			--ds-success: #60c060;
-			--ds-warning: #d7a55b;
+			--ds-bg: #ffffff;
+			--ds-surface: #f5f5f5;
+			--ds-surface-2: #ffffff;
+			--ds-surface-hover: #eeeeee;
+			--ds-border: #e0e0e0;
+			--ds-border-strong: #c7c7c7;
+			--ds-text: #1a1a1a;
+			--ds-text-muted: #515c6b;
+			--ds-text-dim: #5e6673;
+			--ds-accent: #245bce;
+			--ds-accent-strong: #245bce;
+			--ds-accent-bg: #245bce;
+			--ds-accent-bg-hover: #1d4ed8;
+			--ds-accent-fg: #ffffff;
+			--ds-danger: #dc2626;
+			--ds-danger-bg: #fef2f2;
+			--ds-success: #16a34a;
+			--ds-warning: #b45309;
+			--ds-placeholder: #94a3b8;
+			--ds-ns-tag-fg: #6d28d9;
+			--ds-ns-tag-border: #ddd6fe;
+			--ds-badge-success-border: #bbf7d0;
+			--ds-badge-danger-border: #fecaca;
+			--ds-badge-warning-border: #fde68a;
 			--ds-tap-min: 44px;
 		}
+		@media (prefers-color-scheme: dark) {
+			:root {
+				--ds-bg: #1a1a1a;
+				--ds-surface: #242424;
+				--ds-surface-2: #1a1a1a;
+				--ds-surface-hover: #2e2e2e;
+				--ds-border: #454545;
+				--ds-border-strong: #5a5a5a;
+				--ds-text: #e8e8e8;
+				--ds-text-muted: #b7b7b7;
+				--ds-text-dim: #a4a4a4;
+				--ds-accent: #a4c2f4;
+				--ds-accent-strong: #a4c2f4;
+				--ds-accent-bg: #2a4a3f;
+				--ds-accent-bg-hover: #3a6a5f;
+				--ds-accent-fg: #182234;
+				--ds-danger: #f87171;
+				--ds-danger-bg: #3a2222;
+				--ds-success: #4ade80;
+				--ds-warning: #facc15;
+				--ds-placeholder: #666;
+				--ds-ns-tag-fg: #b294bb;
+				--ds-ns-tag-border: #3a2a4a;
+				--ds-badge-success-border: #2a4a2a;
+				--ds-badge-danger-border: #4a2a2a;
+				--ds-badge-warning-border: #5a4a2a;
+			}
+		}
 		*, *::before, *::after { box-sizing: border-box; }
-		html { -webkit-text-size-adjust: 100%; }
+		html { -webkit-text-size-adjust: 100%; color-scheme: light dark; }
 		body {
-			font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 			background: var(--ds-bg);
 			color: var(--ds-text);
 			margin: 0 auto;
@@ -830,6 +1017,7 @@ const DASHBOARD_BASE_CSS = `
 			font-size: var(--ds-font-base);
 			-webkit-font-smoothing: antialiased;
 		}
+		pre, code { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
 		h1 { font-size: 1.35em; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
 		h2 { font-size: 1em; font-weight: 600; }
 		h3 { font-size: 0.9em; margin: 0 0 var(--ds-space-2); color: var(--ds-text-muted); font-weight: 600; }
@@ -848,7 +1036,7 @@ const DASHBOARD_BASE_CSS = `
 			border-radius: var(--ds-radius-sm);
 			transition: border-color 0.12s ease;
 		}
-		input[type="text"]::placeholder, textarea::placeholder { color: #555; }
+		input[type="text"]::placeholder, textarea::placeholder { color: var(--ds-placeholder); }
 		input[type="text"]:focus, select:focus, textarea:focus, input[type="checkbox"]:focus-visible {
 			outline: none;
 			border-color: var(--ds-accent);
@@ -863,7 +1051,7 @@ function renderIndexPage(): string {
 <head>
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-	<meta name="theme-color" content="#18181e" />
+	<meta name="theme-color" content="#ffffff" />
 	<meta name="mobile-web-app-capable" content="yes" />
 	<meta name="apple-mobile-web-app-capable" content="yes" />
 	<meta name="apple-mobile-web-app-title" content="pi" />
@@ -884,7 +1072,7 @@ ${DASHBOARD_BASE_CSS}
 		.ns-bar select, .ns-bar input[type="text"] { font-size: var(--ds-font-sm); padding: 5px 8px; }
 		.ns-bar input[type="text"] { width: 160px; }
 		#ns-create-form { display: inline-flex; align-items: center; gap: var(--ds-space-2); }
-		.ns-tag { color: #b294bb; border-color: #3a2a4a; }
+		.ns-tag { color: var(--ds-ns-tag-fg); border-color: var(--ds-ns-tag-border); }
 		/* ---- Two-column layout: session list (main) + spawn card (side) ---- */
 		.dash-columns { display: flex; gap: var(--ds-space-6); align-items: flex-start; }
 		.dash-main { flex: 1 1 auto; min-width: 0; }
@@ -915,7 +1103,7 @@ ${DASHBOARD_BASE_CSS}
 		.spawn-check input { appearance: none; -webkit-appearance: none; width: 16px; height: 16px; margin: 0; border: 1px solid var(--ds-border-strong); border-radius: 3px; background: var(--ds-surface-2); cursor: pointer; position: relative; flex-shrink: 0; }
 		.spawn-check input:hover { border-color: var(--ds-accent-strong); }
 		.spawn-check input:checked { background: var(--ds-accent-bg); border-color: var(--ds-accent-strong); }
-		.spawn-check input:checked::after { content: ""; position: absolute; left: 5px; top: 2px; width: 4px; height: 8px; border: solid #cfe8df; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+		.spawn-check input:checked::after { content: ""; position: absolute; left: 5px; top: 2px; width: 4px; height: 8px; border: solid var(--ds-accent-fg); border-width: 0 2px 2px 0; transform: rotate(45deg); }
 		.spawn-check:hover { color: var(--ds-text) !important; }
 		.dir-suggest { position: relative; }
 		.suggest-list { position: absolute; left: 0; right: 0; z-index: 5; background: var(--ds-surface-2); border: 1px solid var(--ds-border-strong); border-top: none; border-radius: 0 0 var(--ds-radius-sm) var(--ds-radius-sm); max-height: 200px; overflow-y: auto; box-shadow: 0 8px 16px rgba(0,0,0,0.35); }
@@ -934,9 +1122,9 @@ ${DASHBOARD_BASE_CSS}
 		.session-name-input { font-family: inherit; font-size: var(--ds-font-md); background: var(--ds-surface-2); color: var(--ds-text); border: 1px solid var(--ds-accent-strong); border-radius: 3px; padding: 3px 6px; min-width: 0; }
 		.session-actions { display: flex; gap: var(--ds-space-2); flex-wrap: wrap; flex-shrink: 0; }
 		.badge { font-size: var(--ds-font-xs); padding: 2px 7px; border-radius: var(--ds-radius-sm); border: 1px solid var(--ds-border-strong); color: var(--ds-text-muted); flex-shrink: 0; }
-		.badge-online, .badge-starting { color: var(--ds-success); border-color: #2a4a2a; }
-		.badge-error { color: var(--ds-danger); border-color: #4a2a2a; }
-		.badge-stopping { color: var(--ds-warning); border-color: #5a4a2a; }
+		.badge-online, .badge-starting { color: var(--ds-success); border-color: var(--ds-badge-success-border); }
+		.badge-error { color: var(--ds-danger); border-color: var(--ds-badge-danger-border); }
+		.badge-stopping { color: var(--ds-warning); border-color: var(--ds-badge-warning-border); }
 		.badge-stopped, .badge-past { color: var(--ds-text-muted); }
 		.pin-icon { color: var(--ds-warning); flex-shrink: 0; display: inline-flex; align-items: center; }
 		.kebab-wrap { position: relative; flex-shrink: 0; }
@@ -965,12 +1153,12 @@ ${DASHBOARD_BASE_CSS}
 		.row-btn { font-family: inherit; font-size: var(--ds-font-base); background: var(--ds-surface-2); color: var(--ds-accent); border: 1px solid var(--ds-border-strong); padding: 6px 12px; border-radius: var(--ds-radius-sm); cursor: pointer; white-space: nowrap; flex-shrink: 0; min-height: 34px; text-decoration: none; display: inline-flex; align-items: center; transition: background-color 0.12s ease; }
 		.row-btn:hover { background: var(--ds-surface-hover); }
 		.row-btn.danger { color: var(--ds-danger); }
-		.row-btn.active { color: var(--ds-warning); border-color: #5a4a2a; }
+		.row-btn.active { color: var(--ds-warning); border-color: var(--ds-badge-warning-border); }
 		.row-btn:disabled { opacity: 0.4; cursor: default; }
 		.row-btn:disabled:hover { background: var(--ds-surface-2); }
 		.select-trigger { background: none; border: none; color: var(--ds-accent); font-family: inherit; font-size: var(--ds-font-base); cursor: pointer; padding: 6px 4px; }
 		.select-trigger:hover { text-decoration: underline; }
-		.spawn-form button, .ns-bar button:not(.select-trigger) { font-family: inherit; font-size: var(--ds-font-base); cursor: pointer; background: var(--ds-accent-bg); color: var(--ds-text); border: 1px solid var(--ds-accent-strong); padding: 8px 14px; border-radius: var(--ds-radius-sm); transition: background-color 0.12s ease; }
+		.spawn-form button, .ns-bar button:not(.select-trigger) { font-family: inherit; font-size: var(--ds-font-base); cursor: pointer; background: var(--ds-accent-bg); color: var(--ds-accent-fg); border: 1px solid var(--ds-accent-strong); padding: 8px 14px; border-radius: var(--ds-radius-sm); transition: background-color 0.12s ease; }
 		.spawn-form button:hover, .ns-bar button:not(.select-trigger):hover { background: var(--ds-accent-bg-hover); }
 		.ns-bar button:disabled { opacity: 0.4; cursor: default; }
 		/* ---- Inactive-sessions modal: sheet on mobile via the media query below ---- */
@@ -1833,7 +2021,7 @@ function renderSettingsPage(): string {
 <head>
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-	<meta name="theme-color" content="#18181e" />
+	<meta name="theme-color" content="#ffffff" />
 	<link rel="icon" href="/icons/pi.svg" type="image/svg+xml" />
 	<title>pi settings</title>
 	<style>
@@ -1849,7 +2037,7 @@ ${DASHBOARD_BASE_CSS}
 		.section-hint { color: var(--ds-text-dim); font-size: var(--ds-font-sm); margin: 0 0 var(--ds-space-3); }
 		label { display: block; margin: var(--ds-space-3) 0 0; font-size: var(--ds-font-sm); color: var(--ds-text-muted); }
 		label:first-of-type { margin-top: 0; }
-		button { font-family: inherit; font-size: var(--ds-font-base); cursor: pointer; background: var(--ds-accent-bg); color: var(--ds-text); border: 1px solid var(--ds-accent-strong); padding: 8px 16px; border-radius: var(--ds-radius-sm); transition: background-color 0.12s ease; }
+		button { font-family: inherit; font-size: var(--ds-font-base); cursor: pointer; background: var(--ds-accent-bg); color: var(--ds-accent-fg); border: 1px solid var(--ds-accent-strong); padding: 8px 16px; border-radius: var(--ds-radius-sm); transition: background-color 0.12s ease; }
 		button:hover { background: var(--ds-accent-bg-hover); }
 		.row-btn { font-family: inherit; font-size: var(--ds-font-base); background: var(--ds-surface-2); color: var(--ds-accent); border: 1px solid var(--ds-border-strong); padding: 6px 12px; border-radius: var(--ds-radius-sm); cursor: pointer; min-height: 34px; }
 		.row-btn:hover { background: var(--ds-surface-hover); }
@@ -3360,6 +3548,36 @@ export async function startServerWeb(options: ServerWebOptions): Promise<ServerW
 						: content,
 				}),
 			);
+			return;
+		}
+
+		// Read-only file explorer (sidebar EXPLORER tree + file viewer).
+		// GET /i/<id>/files?path=<relative> — directory listing, scoped to the instance's cwd.
+		const filesMatch = /^\/i\/([0-9a-f-]{36})\/files$/.exec(url.pathname);
+		if (request.method === "GET" && filesMatch) {
+			const instance = supervisor.getLiveInstance(filesMatch[1]);
+			if (!instance) {
+				sendText(response, 404, "Unknown instance\n");
+				return;
+			}
+			const relative = url.searchParams.get("path") ?? "";
+			response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+			response.end(JSON.stringify(listExplorerDir(instance.cwd, relative)));
+			return;
+		}
+
+		// GET /i/<id>/files/content?path=<relative> — file content, capped at EXPLORER_MAX_FILE_BYTES
+		// and restricted to text-ish files (see isExplorerTextFile).
+		const filesContentMatch = /^\/i\/([0-9a-f-]{36})\/files\/content$/.exec(url.pathname);
+		if (request.method === "GET" && filesContentMatch) {
+			const instance = supervisor.getLiveInstance(filesContentMatch[1]);
+			if (!instance) {
+				sendText(response, 404, "Unknown instance\n");
+				return;
+			}
+			const relative = url.searchParams.get("path") ?? "";
+			response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+			response.end(JSON.stringify(readExplorerFile(instance.cwd, relative)));
 			return;
 		}
 

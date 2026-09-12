@@ -78,7 +78,8 @@ export function pushToast(message: string, kind: Toast["kind"] = "info"): void {
 // The app is served at / by pi --web and at /i/<instance-id>/ by pi-server;
 // the WS endpoint is always at <base>ws.
 const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
-const basePath = location.pathname.endsWith("/") ? location.pathname : `${location.pathname}/`;
+/** Same-origin base path this SPA is served under; REST endpoints (subagents, files, ...) hang off it. */
+export const basePath = location.pathname.endsWith("/") ? location.pathname : `${location.pathname}/`;
 /** Supervised instance id when served by pi-server, undefined under `pi --web`. */
 export const instanceId = /^\/i\/([0-9a-f-]{36})\//.exec(basePath)?.[1];
 export const client = new RpcClient(`${wsProtocol}://${location.host}${basePath}ws`, {
@@ -98,9 +99,9 @@ function handleConnectionChange(isConnected: boolean, closeCode?: number): void 
 	if (isConnected) {
 		sessionUnreachable.value = false;
 		void sync();
-		// A reconnect is a reasonable moment to also refresh the pinned sessions
-		// sidebar (e.g. another session was pinned/unpinned while this one dropped).
-		void refreshPinnedSessions();
+		// A reconnect is a reasonable moment to also refresh the sidebar's session
+		// list (e.g. another session was pinned/spawned while this one dropped).
+		void refreshSidebarSessions();
 	} else if (closeCode === INSTANCE_UNREACHABLE_CLOSE_CODE) {
 		// The instance id is gone, but the session itself may have come back under
 		// a NEW instance id (server restart respawns pinned sessions). Follow it
@@ -621,11 +622,11 @@ export const forkPickerOpen = signal(false);
 // ============================================================================
 
 /**
- * Mobile off-canvas state for the pinned-sessions sidebar (hidden inline below
- * 900px; see .pinned-sidebar in style.css). Desktop ignores this - the sidebar
- * is always inline there.
+ * Mobile off-canvas state for the left sidebar (hidden inline below 900px; see
+ * .sidebar in style.css). Desktop ignores this - the sidebar is always inline
+ * there.
  */
-export const pinnedSidebarOpen = signal(false);
+export const sidebarOpen = signal(false);
 
 export type SubagentView = "transcript" | "output" | "outputs";
 
@@ -774,16 +775,21 @@ export function stopSubagentPolling(): void {
 // Pinned sessions sidebar
 // ============================================================================
 
-export interface PinnedSessionSummary {
+export interface SidebarSessionSummary {
 	id: string;
 	name: string;
 	status: string;
+	pinned: boolean;
+	messageCount?: number;
+	// ISO timestamp of the session's last activity, if known.
+	modified?: string;
 	// Account namespace (pi-server concept, see packages/server/src/namespaces.ts);
 	// undefined means the implicit default namespace.
 	namespace?: string;
 }
 
-export const pinnedSessions = signal<PinnedSessionSummary[]>([]);
+/** Live sessions in the current namespace, pinned first, for the sidebar's session list. */
+export const sidebarSessions = signal<SidebarSessionSummary[]>([]);
 
 /**
  * This session's own account namespace (pi-server concept), found by matching
@@ -794,54 +800,95 @@ export const pinnedSessions = signal<PinnedSessionSummary[]>([]);
 export const currentNamespace = signal<string | undefined>(undefined);
 
 /**
- * Pinned + live sessions for the in-session sidebar quick-switcher. Pinning is a
- * pi-server/dashboard concept (InstanceRecord.pinned) with no equivalent under
- * bare `pi --web`, where /api/dashboard-sessions does not exist, so this is a
- * no-op there (instanceId is undefined). Stopped pinned sessions are omitted
- * rather than linked: a pinned session auto-respawns while the server is up, so
- * "stopped" here means genuinely unavailable right now.
+ * Live sessions in the current namespace for the sidebar's session list
+ * (pinned first). The dashboard-sessions API is a pi-server/dashboard concept
+ * with no equivalent under bare `pi --web`, so this is a no-op there
+ * (instanceId is undefined).
  */
-export async function refreshPinnedSessions(): Promise<void> {
+export async function refreshSidebarSessions(): Promise<void> {
 	if (!instanceId) return;
 	try {
 		const res = await fetch("/api/dashboard-sessions");
 		if (!res.ok) return;
 		const data = (await res.json()) as {
 			ok: boolean;
-			sessions?: Array<{ id?: string; name: string; status: string; pinned: boolean; namespace?: string }>;
+			sessions?: Array<{
+				id?: string;
+				name: string;
+				status: string;
+				pinned: boolean;
+				namespace?: string;
+				messageCount?: number;
+				modified?: string;
+			}>;
 		};
 		if (!data.ok || !data.sessions) return;
-		pinnedSessions.value = data.sessions
-			.filter(
-				(session): session is { id: string; name: string; status: string; pinned: boolean; namespace?: string } =>
-					Boolean(session.id) && session.pinned && (session.status === "online" || session.status === "starting"),
-			)
-			.map((session) => ({
-				id: session.id,
-				name: session.name,
-				status: session.status,
-				namespace: session.namespace,
-			}));
+		const live = data.sessions.filter(
+			(
+				session,
+			): session is {
+				id: string;
+				name: string;
+				status: string;
+				pinned: boolean;
+				namespace?: string;
+				messageCount?: number;
+				modified?: string;
+			} => Boolean(session.id) && (session.status === "online" || session.status === "starting"),
+		);
+		// Pinned first, otherwise most-recently-active first.
+		live.sort((a, b) => {
+			if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+			return (b.modified ?? "").localeCompare(a.modified ?? "");
+		});
+		sidebarSessions.value = live.map((session) => ({
+			id: session.id,
+			name: session.name,
+			status: session.status,
+			pinned: session.pinned,
+			namespace: session.namespace,
+			messageCount: session.messageCount,
+			modified: session.modified,
+		}));
 		currentNamespace.value = data.sessions.find((session) => session.id === instanceId)?.namespace;
 	} catch {
 		// Best-effort: the sidebar keeps its last-known list (or stays empty) on failure.
 	}
 }
 
-let pinnedSessionsPollTimer: ReturnType<typeof setInterval> | undefined;
+let sidebarSessionsPollTimer: ReturnType<typeof setInterval> | undefined;
 
 /** Slow poll (not aggressive) since pin/unpin and spawn/stop are infrequent, manual actions. */
-export function startPinnedSessionsPolling(): void {
-	if (pinnedSessionsPollTimer) return;
-	pinnedSessionsPollTimer = setInterval(() => {
-		void refreshPinnedSessions();
+export function startSidebarSessionsPolling(): void {
+	if (sidebarSessionsPollTimer) return;
+	sidebarSessionsPollTimer = setInterval(() => {
+		void refreshSidebarSessions();
 	}, 30_000);
 }
 
-export function stopPinnedSessionsPolling(): void {
-	if (pinnedSessionsPollTimer) {
-		clearInterval(pinnedSessionsPollTimer);
-		pinnedSessionsPollTimer = undefined;
+export function stopSidebarSessionsPolling(): void {
+	if (sidebarSessionsPollTimer) {
+		clearInterval(sidebarSessionsPollTimer);
+		sidebarSessionsPollTimer = undefined;
+	}
+}
+
+/** Spawn a new session in the given cwd (dashboard-style POST /api/spawn) and navigate to it. */
+export async function spawnSessionAndNavigate(cwd: string): Promise<void> {
+	try {
+		const res = await fetch("/api/spawn", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd, namespace: currentNamespace.value }),
+		});
+		const data = (await res.json()) as { ok?: boolean; instance?: { id: string }; error?: string };
+		if (!data.ok || !data.instance) {
+			pushToast(data.error || "Failed to spawn a new session", "error");
+			return;
+		}
+		location.href = `/i/${data.instance.id}/`;
+	} catch (error) {
+		pushToast(`Failed to spawn a new session: ${error instanceof Error ? error.message : String(error)}`, "error");
 	}
 }
 
