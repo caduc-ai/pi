@@ -31,6 +31,7 @@
 ### Changed
 
 - Removed the "Label" field from the dashboard's new-session/resume forms: session identity is now the session's own name (renameable, or model-generated - see coding-agent). Old records with a stored label still display it when the session has no name of its own; nothing in the dashboard sets a label anymore.
+- Refined the dashboard's visual design (index and settings pages): introduced a shared set of spacing/radius/font-size CSS custom properties reused across both pages, one consistent button treatment for every action (primary spawn/save actions, secondary row actions, danger actions, ghost/link triggers), clearer session rows (name truncates independently from a flex-growing working-directory field, hover highlight, larger kebab/menu tap targets), an integrated namespace bar styled as part of the page instead of a separate strip, and a full-height sheet layout for the "Inactive sessions" modal on narrow screens (with scroll lock while open). The settings page's sections and snippet rows got the same spacing/typography treatment, and snippet edit/delete actions now meet a 44px tap target on narrow screens. No behavior, endpoints, ids, or classes referenced by tests changed.
 
 ### Fixed
 

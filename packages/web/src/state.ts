@@ -619,6 +619,13 @@ export const forkPickerOpen = signal(false);
 // Subagent inspection panel
 // ============================================================================
 
+/**
+ * Mobile off-canvas state for the pinned-sessions sidebar (hidden inline below
+ * 900px; see .pinned-sidebar in style.css). Desktop ignores this - the sidebar
+ * is always inline there.
+ */
+export const pinnedSidebarOpen = signal(false);
+
 export type SubagentView = "transcript" | "output" | "outputs";
 
 export const activePanel = signal<"chat" | "subagents">("chat");

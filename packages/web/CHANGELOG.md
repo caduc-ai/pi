@@ -16,8 +16,15 @@
 - Added a pinned-sessions sidebar when served by `pi-server`: a slim left column lists other pinned (and currently live) sessions by name, linking to `/i/<id>/`, with the current session highlighted. Hidden below 900px so it never crowds the chat area on mobile; refreshes on WebSocket reconnect and a slow ~30s poll. Not shown under bare `pi --web`, which has no pinning concept.
 - Added an account namespace tag to the header (when the session is not in the implicit `default` namespace) and to pinned-sidebar entries that span namespaces, using the pi-server dashboard-sessions data the pinned sidebar already fetches. See pi-server's account namespaces.
 
+### Changed
+
+- Refined the visual design across the app: introduced a small set of spacing/radius/font-size CSS custom properties reused throughout `style.css`, consistent header icon-button sizing/hover states, message/tool-card spacing and rounding, an editor composer with a visible focus ring and consistent button sizing, and a more readable footer (the model name now truncates independently instead of the row overflowing). All theme colors continue to come from the `--pi-*` variables `theme.ts` applies from the TUI theme JSONs, so both the light and dark themes (and any custom theme) are unaffected.
+- Changed the pinned-sessions sidebar to stay reachable on narrow screens (below 900px) instead of being hidden outright: it now opens as an off-canvas drawer via a new header toggle, with a tap-to-dismiss backdrop, and closes automatically after selecting a session.
+- Changed several mobile breakpoints to meet a 44px minimum tap target (kebab-equivalent header buttons, subagent tabs/file rows, dialog buttons, snippet/autocomplete entries) and to keep the composer, dialogs, pickers, and autocomplete popovers within a narrow viewport instead of relying on desktop margins. Touch-device dialog/picker/snippet-filter inputs are now 16px to avoid iOS auto-zoom-on-focus, matching the existing chat composer.
+
 ### Fixed
 
+- Fixed three header/sidebar/tool-copy-button hover and text-color rules referencing `--pi-bgHover`, `--pi-fg`, and `--pi-textMuted`, CSS custom properties no theme (`dark.json`, `light.json`, or any custom theme) ever defines; these hover states silently did nothing in every theme. They now use the existing `--pi-selectedBg` and `--pi-text`/`--pi-muted` variables the rest of the app already relies on.
 - Fixed web slash command autocomplete to keep scrolling through all matches and order commands like the TUI.
 - Fixed the footer and session state not staying in sync while the TUI view was open: the app now re-syncs on a new `session_reloaded` event (broadcast when the bridge notices the TUI wrote to the session file), not only when the TUI closes.
 - Fixed the theme picker not switching theme: the dev server proxy did not forward `/themes` (only `/theme`), so the theme list silently fell back to defaults.

@@ -35,6 +35,26 @@
 	--pi-syntaxType: #4ec9b0;
 	--pi-syntaxOperator: #d4d4d4;
 	--pi-syntaxPunctuation: #d4d4d4;
+
+	/* ---- Layout tokens: spacing/radius/font scale, reused everywhere below so
+	   the whole app shares one rhythm instead of one-off pixel values. Kept
+	   separate from the --pi-* theme colors above (those come from theme.ts and
+	   are re-applied per theme; these never change). ---- */
+	--sp-1: 4px;
+	--sp-2: 8px;
+	--sp-3: 12px;
+	--sp-4: 16px;
+	--sp-5: 20px;
+	--sp-6: 28px;
+	--radius-sm: 4px;
+	--radius-md: 8px;
+	--radius-lg: 12px;
+	--font-xs: 11px;
+	--font-sm: 12px;
+	--font-base: 13px;
+	--font-md: 14px;
+	--font-lg: 16px;
+	--tap-min: 44px;
 }
 
 * {
@@ -52,7 +72,7 @@ body {
 	background: var(--pi-pageBg);
 	color: var(--pi-text);
 	font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-	font-size: 14px;
+	font-size: var(--font-md);
 	line-height: 1.5;
 	-webkit-font-smoothing: antialiased;
 }
@@ -77,16 +97,16 @@ body {
 /* ============ Pinned sessions sidebar ============ */
 
 .pinned-sidebar {
-	width: 170px;
+	width: 190px;
 	flex-shrink: 0;
 	overflow-y: auto;
 	border-right: 1px solid var(--pi-borderMuted);
-	padding: 10px 0;
+	padding: var(--sp-3) 0;
 }
 
 .pinned-sidebar-title {
-	padding: 4px 12px 8px;
-	font-size: 11px;
+	padding: var(--sp-1) var(--sp-4) var(--sp-2);
+	font-size: var(--font-xs);
 	text-transform: uppercase;
 	letter-spacing: 0.05em;
 	color: var(--pi-dim);
@@ -94,8 +114,10 @@ body {
 
 .pinned-sidebar-item {
 	display: block;
-	padding: 6px 12px;
-	font-size: 13px;
+	padding: var(--sp-2) var(--sp-4);
+	border-radius: var(--radius-sm);
+	margin: 0 var(--sp-2);
+	font-size: var(--font-base);
 	color: var(--pi-muted);
 	text-decoration: none;
 	overflow: hidden;
@@ -104,13 +126,14 @@ body {
 }
 
 .pinned-sidebar-item:hover {
-	background: var(--pi-bgHover);
-	color: var(--pi-fg);
+	background: var(--pi-selectedBg);
+	color: var(--pi-text);
 }
 
 .pinned-sidebar-item.current {
 	color: var(--pi-accent);
 	background: var(--pi-selectedBg);
+	font-weight: 600;
 }
 
 /* Account namespace tag for a pinned entry that is not the implicit default namespace. */
@@ -120,11 +143,46 @@ body {
 	color: var(--pi-dim);
 }
 
-/* Slim sidebar only; on narrow screens it would crowd the chat area, so it's
-   hidden rather than squeezed. */
+.pinned-sidebar-backdrop {
+	display: none;
+}
+
+/* Below 900px the sidebar would crowd the chat area inline, so it becomes an
+   off-canvas drawer (see .header-sidebar-toggle) instead of staying visible. */
 @media (max-width: 900px) {
 	.pinned-sidebar {
-		display: none;
+		position: fixed;
+		inset: 0 25% 0 0;
+		z-index: 210;
+		background: var(--pi-cardBg);
+		border-right: 1px solid var(--pi-borderMuted);
+		transform: translateX(-100%);
+		transition: transform 0.18s ease;
+		width: auto;
+		padding-top: calc(var(--sp-3) + env(safe-area-inset-top));
+		padding-bottom: env(safe-area-inset-bottom);
+		box-shadow: 8px 0 24px rgba(0, 0, 0, 0.35);
+	}
+
+	.pinned-sidebar.open {
+		transform: translateX(0);
+	}
+
+	.pinned-sidebar-backdrop {
+		display: block;
+		position: fixed;
+		inset: 0;
+		z-index: 200;
+		background: rgba(0, 0, 0, 0.5);
+		border: 0;
+		padding: 0;
+		cursor: default;
+	}
+
+	.pinned-sidebar-item {
+		min-height: var(--tap-min);
+		display: flex;
+		align-items: center;
 	}
 }
 
@@ -133,26 +191,47 @@ body {
 .header {
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	padding: 8px 14px;
+	gap: var(--sp-2);
+	padding: var(--sp-2) var(--sp-4);
+	padding-top: calc(var(--sp-2) + env(safe-area-inset-top));
 	border-bottom: 1px solid var(--pi-borderMuted);
 	color: var(--pi-muted);
-	font-size: 13px;
+	font-size: var(--font-base);
 	flex-shrink: 0;
 }
 
-.header-home {
+/* Shared sizing for every icon-only header control (home, sidebar toggle, review). */
+.header-home,
+.header-sidebar-toggle {
 	display: flex;
 	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
 	color: var(--pi-muted);
 	flex-shrink: 0;
-	padding: 2px;
-	border-radius: 3px;
+	background: none;
+	border: 0;
+	border-radius: var(--radius-sm);
+	cursor: pointer;
 }
 
-.header-home:hover {
-	color: var(--pi-fg);
-	background: var(--pi-bgHover);
+.header-home:hover,
+.header-sidebar-toggle:hover {
+	color: var(--pi-text);
+	background: var(--pi-selectedBg);
+}
+
+/* Only relevant once the sidebar is a drawer (see .pinned-sidebar); an inline
+   sidebar on wider screens is already always visible. */
+.header-sidebar-toggle {
+	display: none;
+}
+
+@media (max-width: 900px) {
+	.header-sidebar-toggle {
+		display: flex;
+	}
 }
 
 .header-title {
@@ -160,15 +239,17 @@ body {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	flex: 1;
+	min-width: 0;
+	font-weight: 500;
 }
 
 /* Account namespace (pi-server concept) this session runs under, shown only
    when it is not the implicit default namespace. */
 .header-namespace-tag {
 	flex-shrink: 0;
-	font-size: 11px;
+	font-size: var(--font-xs);
 	padding: 1px 6px;
-	border-radius: 3px;
+	border-radius: var(--radius-sm);
 	border: 1px solid var(--pi-borderMuted);
 	color: var(--pi-dim);
 }
@@ -242,10 +323,10 @@ body {
 	flex: 1;
 	overflow-y: auto;
 	overscroll-behavior-y: contain;
-	padding: 12px 14px;
+	padding: var(--sp-4);
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	gap: var(--sp-3);
 	min-height: 0;
 }
 
@@ -258,15 +339,17 @@ body {
 .msg {
 	max-width: 100%;
 	overflow-wrap: break-word;
+	line-height: 1.55;
 }
 
 .msg-user {
 	background: var(--pi-userMessageBg);
-	border-radius: 6px;
-	padding: 8px 12px;
+	border-radius: var(--radius-md);
+	padding: var(--sp-2) var(--sp-3);
 	align-self: flex-end;
 	max-width: 85%;
 	white-space: pre-wrap;
+	line-height: 1.5;
 }
 
 .msg-user-text {
@@ -377,10 +460,11 @@ body {
 /* ============ Tool execution ============ */
 
 .tool {
-	border-radius: 6px;
-	margin: 6px 0;
+	border-radius: var(--radius-md);
+	margin: var(--sp-1) 0;
 	overflow: hidden;
-	font-size: 13px;
+	font-size: var(--font-base);
+	border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .tool-pending {
@@ -397,7 +481,7 @@ body {
 
 .tool-title {
 	display: flex;
-	gap: 8px;
+	gap: var(--sp-2);
 	align-items: baseline;
 	width: 100%;
 	text-align: left;
@@ -405,12 +489,12 @@ body {
 	border: 0;
 	color: inherit;
 	font: inherit;
-	padding: 6px 10px;
+	padding: var(--sp-2) var(--sp-3);
 	cursor: default;
 }
 
 .tool-title:hover {
-	background: rgba(255, 255, 255, 0.03);
+	background: rgba(255, 255, 255, 0.04);
 }
 
 .tool-name {
@@ -511,10 +595,11 @@ body {
 
 .md pre.codeblock {
 	border: 1px solid var(--pi-borderMuted);
-	border-radius: 6px;
-	padding: 8px 10px;
+	border-radius: var(--radius-md);
+	padding: var(--sp-2) var(--sp-3);
 	overflow-x: auto;
-	margin: 0.5em 0;
+	margin: 0.6em 0;
+	line-height: 1.5;
 }
 
 .md pre.codeblock code {
@@ -530,20 +615,21 @@ body {
 
 .copy-btn {
 	position: absolute;
-	top: 2px;
-	right: 2px;
+	top: 4px;
+	right: 4px;
 	z-index: 2;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	padding: 4px;
+	padding: 5px;
 	background: var(--pi-cardBg);
-	color: var(--pi-textMuted);
+	color: var(--pi-muted);
 	border: 1px solid var(--pi-borderMuted);
-	border-radius: 4px;
+	border-radius: var(--radius-sm);
 	cursor: pointer;
 	opacity: 0;
-	transition: opacity 0.15s;
+	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+	transition: opacity 0.15s, color 0.12s ease;
 }
 
 .copy-wrap:hover .copy-btn,
@@ -612,7 +698,7 @@ body {
 
 .editor-area {
 	flex-shrink: 0;
-	padding: 8px 14px 4px;
+	padding: var(--sp-2) var(--sp-4) var(--sp-1);
 	position: relative;
 }
 
@@ -656,10 +742,11 @@ body {
 	right: 14px;
 	background: var(--pi-cardBg);
 	border: 1px solid var(--pi-borderMuted);
-	border-radius: 6px;
-	margin-bottom: 4px;
+	border-radius: var(--radius-md);
+	margin-bottom: var(--sp-1);
 	overflow: hidden;
 	z-index: 10;
+	box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
 }
 
 .autocomplete-entry {
@@ -702,16 +789,18 @@ body {
 .editor-row {
 	position: relative;
 	display: flex;
-	gap: 8px;
+	gap: var(--sp-2);
 	align-items: flex-end;
 	border: 1px solid var(--pi-borderMuted);
-	border-radius: 8px;
-	padding: 6px 8px;
+	border-radius: var(--radius-lg);
+	padding: var(--sp-1) var(--sp-2);
 	background: var(--pi-cardBg);
+	transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
 .editor-row:focus-within {
 	border-color: var(--pi-accent);
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--pi-accent) 25%, transparent);
 }
 
 .editor-input {
@@ -722,24 +811,33 @@ body {
 	resize: none;
 	color: var(--pi-text);
 	font: inherit;
-	line-height: 1.4;
+	line-height: 1.45;
 	max-height: 200px;
-	padding: 4px;
+	padding: var(--sp-1) var(--sp-1);
 }
 
 .editor-button {
 	background: transparent;
 	border: 1px solid var(--pi-borderMuted);
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	color: var(--pi-accent);
 	font: inherit;
 	cursor: pointer;
-	padding: 4px 10px;
+	padding: var(--sp-1) var(--sp-3);
 	flex-shrink: 0;
+	transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.editor-button:hover {
+	border-color: var(--pi-accent);
 }
 
 .editor-button.abort {
 	color: var(--pi-error);
+}
+
+.editor-button.abort:hover {
+	border-color: var(--pi-error);
 }
 
 .editor-button.snippets {
@@ -759,14 +857,16 @@ body {
 	bottom: 100%;
 	left: 0;
 	right: 0;
-	margin-bottom: 6px;
+	margin-bottom: var(--sp-2);
 	background: var(--pi-cardBg);
 	border: 1px solid var(--pi-borderMuted);
-	border-radius: 6px;
+	border-radius: var(--radius-md);
 	overflow: hidden;
 	z-index: 10;
 	display: flex;
 	flex-direction: column;
+	box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+	max-width: 100%;
 }
 
 .snippet-filter {
@@ -849,24 +949,33 @@ body {
 .footer {
 	flex-shrink: 0;
 	border-top: 1px solid var(--pi-borderMuted);
-	padding: 4px 14px calc(6px + env(safe-area-inset-bottom));
-	font-size: 12px;
+	padding: var(--sp-1) var(--sp-4) calc(var(--sp-2) + env(safe-area-inset-bottom));
+	font-size: var(--font-sm);
 	color: var(--pi-dim);
 }
 
 .footer-row {
 	display: flex;
 	justify-content: space-between;
-	gap: 10px;
+	align-items: center;
+	gap: var(--sp-3);
 }
 
 .footer-left,
 .footer-right {
 	display: flex;
-	gap: 12px;
+	gap: var(--sp-3);
 	align-items: center;
 	overflow: hidden;
 	white-space: nowrap;
+}
+
+/* Model name is the least critical thing to keep in full on a narrow footer;
+   let it shrink and ellipsize before the right-side stats get squeezed. */
+.footer-left {
+	flex: 1 1 auto;
+	min-width: 0;
+	text-overflow: ellipsis;
 }
 
 .footer-right {
@@ -929,10 +1038,11 @@ select.theme-toggle {
 .dialog {
 	background: var(--pi-cardBg);
 	border: 1px solid var(--pi-borderMuted);
-	border-radius: 8px;
-	padding: 14px;
+	border-radius: var(--radius-lg);
+	padding: var(--sp-4);
 	width: 100%;
 	max-width: 440px;
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
 }
 
 .dialog-title {
@@ -962,12 +1072,13 @@ select.theme-toggle {
 .dialog-button {
 	background: transparent;
 	border: 1px solid var(--pi-borderMuted);
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	color: var(--pi-text);
 	font: inherit;
-	padding: 6px 12px;
+	padding: var(--sp-2) var(--sp-3);
 	cursor: pointer;
 	text-align: left;
+	transition: border-color 0.12s ease;
 }
 
 .dialog-button:hover,
@@ -1020,10 +1131,11 @@ select.theme-toggle {
 	background: var(--pi-cardBg);
 	border: 1px solid var(--pi-borderMuted);
 	border-left-width: 3px;
-	border-radius: 6px;
-	padding: 8px 12px;
-	font-size: 13px;
+	border-radius: var(--radius-md);
+	padding: var(--sp-2) var(--sp-3);
+	font-size: var(--font-base);
 	overflow-wrap: break-word;
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
 }
 
 .toast-info {
@@ -1062,12 +1174,13 @@ select.theme-toggle {
 	position: relative;
 	background: var(--pi-cardBg);
 	border: 1px solid var(--pi-borderMuted);
-	border-radius: 8px;
+	border-radius: var(--radius-lg);
 	width: min(520px, 100%);
 	max-height: 60vh;
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
 }
 
 .picker-title {
@@ -1128,11 +1241,11 @@ select.theme-toggle {
 
 .command-result {
 	flex-shrink: 0;
-	margin: 4px 14px;
-	padding: 8px 12px;
+	margin: var(--sp-1) var(--sp-4);
+	padding: var(--sp-2) var(--sp-3);
 	background: var(--pi-cardBg);
 	border: 1px solid var(--pi-borderMuted);
-	border-radius: 8px;
+	border-radius: var(--radius-md);
 	max-height: 40vh;
 	overflow-y: auto;
 }
@@ -1175,9 +1288,56 @@ select.theme-toggle {
 	.tool-output {
 		font-size: 12px;
 	}
+
+	/* The title needs the room; the namespace tag is a nice-to-have. */
+	.header {
+		gap: var(--sp-1);
+		padding-left: var(--sp-3);
+		padding-right: var(--sp-3);
+	}
+
+	.header-namespace-tag {
+		display: none;
+	}
+
+	.header-terminal,
+	.header-subagents {
+		padding: 3px 7px;
+	}
+
+	.header-subagents-count {
+		margin-left: 2px;
+	}
+
+	/* Popovers anchored to the composer must stay within a narrow viewport
+	   instead of relying on the desktop's generous left/right margins. */
+	.autocomplete,
+	.snippet-picker {
+		left: var(--sp-2);
+		right: var(--sp-2);
+	}
+
+	.picker-root {
+		padding: 8vh var(--sp-2) var(--sp-2);
+	}
+
+	.dialog-overlay {
+		padding: var(--sp-3);
+	}
+
+	/* Full-bleed terminal/TUI hosts: every pixel of width matters for a real terminal. */
+	.terminal-host,
+	.tui-host {
+		padding: var(--sp-1) 2px;
+	}
+
+	.terminal-header {
+		padding: var(--sp-1) var(--sp-2);
+	}
 }
 
-/* Touch devices: larger tap targets, no iOS focus zoom, send via button */
+/* Touch devices: larger tap targets, 16px inputs (avoids iOS auto-zoom-on-focus),
+   send via button rather than Enter. */
 @media (pointer: coarse) {
 	.editor-input {
 		font-size: 16px;
@@ -1185,6 +1345,19 @@ select.theme-toggle {
 
 	.editor-button {
 		padding: 8px 14px;
+		min-height: var(--tap-min);
+	}
+
+	.header-home,
+	.header-sidebar-toggle,
+	.header-review {
+		width: 34px;
+		height: 34px;
+	}
+
+	.header-terminal,
+	.header-subagents {
+		min-height: var(--tap-min);
 	}
 
 	.tool-title {
@@ -1195,9 +1368,37 @@ select.theme-toggle {
 		padding: 8px 10px;
 	}
 
-	.autocomplete-entry {
+	.autocomplete-entry,
+	.snippet-entry {
 		min-height: 44px;
 		align-items: center;
+	}
+
+	.dialog-input,
+	.dialog-textarea,
+	.snippet-filter,
+	.picker-input {
+		font-size: 16px;
+	}
+
+	.dialog-button {
+		min-height: var(--tap-min);
+	}
+
+	.copy-btn {
+		padding: 6px;
+	}
+
+	.subagents-tab {
+		min-height: var(--tap-min);
+	}
+
+	.subagents-view-tabs button {
+		min-height: var(--tap-min);
+	}
+
+	.subagents-file {
+		min-height: var(--tap-min);
 	}
 }
 
@@ -1207,32 +1408,38 @@ select.theme-toggle {
 
 .header-review {
 	align-items: center;
-	border-radius: 3px;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border-radius: var(--radius-sm);
 	color: var(--pi-muted);
 	display: flex;
 	flex-shrink: 0;
 	margin-left: auto;
-	padding: 2px;
 }
 
 .header-review:hover {
-	background: var(--pi-bgHover);
-	color: var(--pi-fg);
+	background: var(--pi-selectedBg);
+	color: var(--pi-text);
 }
 
 .header-terminal {
 	background: none;
 	border: 1px solid var(--pi-borderMuted);
-	border-radius: 4px;
+	border-radius: var(--radius-sm);
 	color: var(--pi-muted);
 	cursor: pointer;
 	font-family: inherit;
-	font-size: 12px;
-	padding: 2px 7px;
+	font-size: var(--font-sm);
+	line-height: 1.3;
+	min-height: 26px;
+	padding: 3px 9px;
+	transition: color 0.12s ease, border-color 0.12s ease;
 }
 
 .header-terminal:hover {
 	color: var(--pi-text);
+	border-color: var(--pi-muted);
 }
 
 .header-terminal.active {
@@ -1267,15 +1474,17 @@ select.theme-toggle {
 .terminal-close {
 	background: none;
 	border: none;
+	border-radius: var(--radius-sm);
 	color: var(--pi-muted);
 	cursor: pointer;
 	font-size: 16px;
 	line-height: 1;
-	padding: 0 4px;
+	padding: 4px 8px;
 }
 
 .terminal-close:hover {
 	color: var(--pi-text);
+	background: var(--pi-selectedBg);
 }
 
 .terminal-host-wrap {
@@ -1356,17 +1565,21 @@ select.theme-toggle {
 .header-subagents {
 	background: none;
 	border: 1px solid var(--pi-borderMuted);
-	border-radius: 4px;
+	border-radius: var(--radius-sm);
 	color: var(--pi-muted);
 	cursor: pointer;
 	font-family: inherit;
-	font-size: 12px;
-	margin-left: 8px;
-	padding: 2px 7px;
+	font-size: var(--font-sm);
+	line-height: 1.3;
+	min-height: 26px;
+	margin-left: var(--sp-1);
+	padding: 3px 9px;
+	transition: color 0.12s ease, border-color 0.12s ease;
 }
 
 .header-subagents:hover {
 	color: var(--pi-text);
+	border-color: var(--pi-muted);
 }
 
 .header-subagents.active {
@@ -1722,7 +1935,7 @@ select.theme-toggle {
 }
 
 .subagents-file:hover {
-	background: var(--pi-bgHover);
+	background: var(--pi-selectedBg);
 }
 
 .subagents-file.active {

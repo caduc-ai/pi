@@ -13,6 +13,8 @@ import {
 	connected,
 	currentNamespace,
 	instanceId,
+	pinnedSessions,
+	pinnedSidebarOpen,
 	sessionState,
 	sessionUnreachable,
 	subagentRuns,
@@ -28,6 +30,7 @@ function Header() {
 	const isConnected = connected.value;
 	// Review runs against the session's working location, which /cd can move.
 	const cwd = sessionState.value?.cwd;
+	const hasPinnedSidebar = instanceId !== undefined && pinnedSessions.value.length > 0;
 	return (
 		<header class="header">
 			<a href="/" class="header-home" title="All sessions">
@@ -37,6 +40,26 @@ function Header() {
 					<rect x="6" y="9" width="4" height="5" stroke="currentColor" stroke-width="1.2" fill="none" />
 				</svg>
 			</a>
+			{hasPinnedSidebar ? (
+				<button
+					type="button"
+					class="header-sidebar-toggle"
+					title="Pinned sessions"
+					onClick={() => {
+						pinnedSidebarOpen.value = !pinnedSidebarOpen.value;
+					}}
+				>
+					<svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+						<title>Pinned sessions</title>
+						<path
+							d="M2 3.5h12M2 8h12M2 12.5h12"
+							stroke="currentColor"
+							stroke-width="1.3"
+							stroke-linecap="round"
+						/>
+					</svg>
+				</button>
+			) : null}
 			<span class="header-title">{name ? `pi — ${name}` : "pi"}</span>
 			{currentNamespace.value ? <span class="header-namespace-tag">{currentNamespace.value}</span> : null}
 			{cwd ? (
