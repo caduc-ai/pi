@@ -392,9 +392,9 @@ export function SubagentsPanel() {
 								</div>
 							) : null}
 							{view === "outputs" && file && selected.outputs?.some((output) => output.path === file.path) ? (
-								<div class="subagents-output">
-									<MarkdownView text={file.content} />
-								</div>
+								<pre class="subagents-file-content">
+									<code>{file.content}</code>
+								</pre>
 							) : null}
 							{file?.truncated ? (
 								<div class="subagents-truncated">File truncated at 4MB by the server.</div>

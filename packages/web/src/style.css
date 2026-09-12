@@ -2493,6 +2493,26 @@ samp {
 	font-size: 13px;
 }
 
+.subagents-file-content {
+	background: var(--tool-bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	color: var(--text);
+	font-family: var(--font-mono);
+	font-size: var(--font-sm);
+	line-height: 1.5;
+	margin: 0;
+	max-height: min(65vh, 720px);
+	overflow: auto;
+	padding: var(--sp-3);
+	text-align: left;
+	white-space: pre;
+}
+
+.subagents-file-content code {
+	font: inherit;
+}
+
 .subagents-files {
 	display: flex;
 	flex-direction: column;
@@ -2717,6 +2737,30 @@ samp {
 	font-size: var(--font-xs);
 	padding: var(--sp-1) 0;
 	text-align: center;
+}
+
+.agents-rail-footer {
+	background: var(--bg-panel);
+	border-top: 1px solid var(--border);
+	flex: 0 0 auto;
+	padding: var(--sp-2) var(--sp-3) calc(var(--sp-2) + env(safe-area-inset-bottom));
+}
+
+.agents-rail-history {
+	background: none;
+	border: 0;
+	border-radius: var(--radius-sm);
+	color: var(--text-muted);
+	cursor: pointer;
+	font: inherit;
+	font-size: var(--font-sm);
+	padding: var(--sp-2);
+	width: 100%;
+}
+
+.agents-rail-history:hover {
+	background: var(--bg-hover);
+	color: var(--accent);
 }
 
 @media (max-width: 900px) {

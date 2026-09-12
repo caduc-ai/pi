@@ -1,5 +1,12 @@
 import { useEffect, useState } from "preact/hooks";
-import { agentsRailOpen, focusSubagentRun, subagentSnapshot, toggleAgentsRail } from "../state.ts";
+import {
+	activePanel,
+	agentsRailOpen,
+	focusSubagentRun,
+	subagentSnapshot,
+	toggleAgentsRail,
+	toggleSubagentsPanel,
+} from "../state.ts";
 import type { AsyncStatusSnapshotNode, AsyncStatusSnapshotState } from "../subagent-status.ts";
 
 const STATE_LABEL: Record<AsyncStatusSnapshotState, string> = {
@@ -148,6 +155,18 @@ export function AgentsRail() {
 						</div>
 					) : null}
 				</div>
+				<footer class="agents-rail-footer">
+					<button
+						type="button"
+						class="agents-rail-history"
+						onClick={() => {
+							if (activePanel.value !== "subagents") toggleSubagentsPanel();
+							if (window.matchMedia("(max-width: 900px)").matches) toggleAgentsRail();
+						}}
+					>
+						View run history
+					</button>
+				</footer>
 			</aside>
 		</>
 	);

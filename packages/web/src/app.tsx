@@ -20,11 +20,9 @@ import {
 	sessionUnreachable,
 	sidebarOpen,
 	stats,
-	subagentRuns,
 	subagentSnapshot,
 	terminalOpen,
 	toggleAgentsRail,
-	toggleSubagentsPanel,
 	toggleTui,
 	tuiActive,
 	widgets,
@@ -162,23 +160,6 @@ function TopBar() {
 						<span class="topbar-btn-label">Review</span>
 					</a>
 				) : null}
-				<button
-					type="button"
-					class={`topbar-btn ${activePanel.value === "subagents" ? "active" : ""}`}
-					title="Inspect subagent runs"
-					onClick={toggleSubagentsPanel}
-				>
-					<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-						<title>Subagents</title>
-						<circle cx="5" cy="5" r="2" stroke="currentColor" stroke-width="1.2" />
-						<circle cx="11" cy="5" r="2" stroke="currentColor" stroke-width="1.2" />
-						<circle cx="8" cy="11.5" r="2" stroke="currentColor" stroke-width="1.2" />
-					</svg>
-					<span class="topbar-btn-label">Subagents</span>
-					{subagentRuns.value.length > 0 ? (
-						<span class="topbar-btn-count">{subagentRuns.value.length}</span>
-					) : null}
-				</button>
 				<button
 					type="button"
 					class={`topbar-btn ${agentsRailOpen.value ? "active" : ""}`}
