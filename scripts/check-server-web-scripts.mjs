@@ -40,6 +40,7 @@ try {
 		["index", "/"],
 		["review", "/review"],
 		["terminal", "/terminal"],
+		["settings", "/settings"],
 	];
 
 	for (const [name, path] of pages) {
@@ -79,4 +80,4 @@ if (failures > 0) {
 	process.exit(1);
 }
 
-console.log("Server web pages OK (index, review, terminal).");
+console.log("Server web pages OK (index, review, terminal, settings).");

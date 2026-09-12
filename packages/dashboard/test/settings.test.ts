@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getDashboardSettingsPath } from "../src/config.ts";
 import {
@@ -99,6 +101,65 @@ describe("dashboard settings storage", () => {
 	});
 });
 
+interface SnippetFixture {
+	id: string;
+	name: string;
+	text: string;
+}
+
+interface SnippetsPageHarness {
+	/** Current innerHTML of #snippets-list, as produced by the page's renderSnippets. */
+	rowsHtml: () => string;
+	/** Event types the page registered on #snippets-list. */
+	listEvents: string[];
+	/** The page script's own globals, so its handlers can be invoked directly. */
+	page: Record<string, (id: string) => unknown>;
+}
+
+/**
+ * Run the settings page's inline script against a minimal DOM stub. Snippet
+ * rows are built client-side by renderSnippets, so the server HTML alone says
+ * nothing about their markup.
+ */
+async function runSnippetsPageScript(pageHtml: string, snippets: SnippetFixture[]): Promise<SnippetsPageHarness> {
+	const script = [...pageHtml.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+		.map((match) => match[1])
+		.find((block) => block.includes("function renderSnippets"));
+	if (!script) throw new Error("settings page has no renderSnippets script block");
+
+	const listEvents: string[] = [];
+	const snippetsList = {
+		innerHTML: "",
+		addEventListener: (type: string) => {
+			listEvents.push(type);
+		},
+	};
+	const elements: Record<string, unknown> = {
+		"snippets-list": snippetsList,
+		"settings-default-cwd": { value: "", addEventListener: () => {} },
+		"settings-cwd-suggest-list": { style: {}, innerHTML: "", querySelectorAll: () => [] },
+	};
+	const context: Record<string, unknown> = {
+		document: {
+			getElementById: (id: string) => elements[id] ?? null,
+			querySelector: () => null,
+			addEventListener: () => {},
+		},
+		fetch: async () => ({ json: async () => ({ ok: true, settings: { snippets } }) }),
+		// No-op timers: the delete confirm window must not fire during the test.
+		setTimeout: () => 0,
+		clearTimeout: () => {},
+	};
+	runInNewContext(script, context);
+	// Let the script's loadSettings() fetch resolve and render.
+	await new Promise((resolve) => setImmediate(resolve));
+	return {
+		rowsHtml: () => snippetsList.innerHTML,
+		listEvents,
+		page: context as Record<string, (id: string) => unknown>,
+	};
+}
+
 describe("dashboard settings over HTTP", () => {
 	let handle: ServerWebHandle;
 	let baseUrl: string;
@@ -158,5 +219,38 @@ describe("dashboard settings over HTTP", () => {
 		expect(indexHtml).toContain('href="/settings"');
 		expect(indexHtml).toContain('id="spawn-cwd"');
 		expect(indexHtml).toContain('value="/srv/projects"');
+	});
+
+	// Regression: snippet ids are randomUUID strings, and the row buttons used to be
+	// built as onclick="startSnippetEdit(" + JSON.stringify(s.id) + ")". The quotes
+	// JSON.stringify emits closed the attribute early, so Edit/Delete/Save silently
+	// did nothing.
+	it("renders snippet rows with data-action buttons instead of quoted inline onclick", async () => {
+		const snippet = { id: randomUUID(), name: "Review", text: "Please review:\nthe diff" };
+		updateDashboardSettings({ snippets: [snippet] });
+		const pageHtml = await (await fetch(`${baseUrl}/settings`)).text();
+
+		// Every onclick left on the page is a bare call: no quote characters, nothing interpolated.
+		for (const match of pageHtml.matchAll(/onclick="([^"]*)"/g)) {
+			expect(match[1]).toMatch(/^[A-Za-z0-9_$]+\(\)$/);
+		}
+
+		const harness = await runSnippetsPageScript(pageHtml, [snippet]);
+		expect(harness.listEvents).toContain("click");
+		const rows = harness.rowsHtml();
+		expect(rows).toContain(`data-id="${snippet.id}"`);
+		expect(rows).toContain('data-action="edit"');
+		expect(rows).toContain('data-action="delete"');
+		expect(rows).not.toContain("onclick");
+
+		harness.page.deleteSnippet(snippet.id);
+		expect(harness.rowsHtml()).toContain("Confirm delete");
+
+		harness.page.startSnippetEdit(snippet.id);
+		const editing = harness.rowsHtml();
+		expect(editing).toContain("snippet-row editing");
+		expect(editing).toContain('data-action="save"');
+		expect(editing).toContain('data-action="cancel"');
+		expect(editing).not.toContain("onclick");
 	});
 });

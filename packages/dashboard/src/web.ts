@@ -2257,8 +2257,8 @@ ${DASHBOARD_BASE_CSS}
 						'<label>Name<br><input type="text" class="snippet-edit-name" maxlength="80" value="' + esc(s.name) + '" /></label>' +
 						'<label>Text<br><textarea class="snippet-edit-text" rows="4">' + esc(s.text) + '</textarea></label>' +
 						'<div class="actions">' +
-							'<button type="button" class="primary-btn" onclick="saveSnippetEdit(' + JSON.stringify(s.id) + ')">Save</button>' +
-							'<button type="button" class="row-btn" onclick="cancelSnippetEdit()">Cancel</button>' +
+							'<button type="button" class="primary-btn" data-action="save">Save</button>' +
+							'<button type="button" class="row-btn" data-action="cancel">Cancel</button>' +
 							'<span class="result" id="snippet-edit-result-' + esc(s.id) + '"></span>' +
 						'</div>' +
 					'</div>';
@@ -2270,12 +2270,29 @@ ${DASHBOARD_BASE_CSS}
 						'<div class="snippet-preview">' + esc(firstLine(s.text)) + '</div>' +
 					'</div>' +
 					'<div class="snippet-actions">' +
-						'<button type="button" class="row-btn" onclick="startSnippetEdit(' + JSON.stringify(s.id) + ')">Edit</button>' +
-						'<button type="button" class="row-btn danger" onclick="deleteSnippet(' + JSON.stringify(s.id) + ')">' + (armed ? "Confirm delete" : "Delete") + '</button>' +
+						'<button type="button" class="row-btn" data-action="edit">Edit</button>' +
+						'<button type="button" class="row-btn danger" data-action="delete">' + (armed ? "Confirm delete" : "Delete") + '</button>' +
 					'</div>' +
 				'</div>';
 			}).join("");
 		}
+
+		// Row buttons carry data-action and are wired by one delegated listener on the
+		// (never re-created) list container, like the dashboard index page's
+		// attachRowHandlers. Snippet ids are UUID strings, so interpolating them into
+		// an inline onclick attribute ended the attribute at the id's first quote and
+		// left every row action a no-op.
+		document.getElementById("snippets-list").addEventListener("click", function(e) {
+			var btn = e.target.closest("[data-action]");
+			if (!btn) return;
+			var row = btn.closest(".snippet-row");
+			var id = row ? row.getAttribute("data-id") : "";
+			var action = btn.getAttribute("data-action");
+			if (action === "edit") startSnippetEdit(id);
+			else if (action === "delete") deleteSnippet(id);
+			else if (action === "save") void saveSnippetEdit(id);
+			else if (action === "cancel") cancelSnippetEdit();
+		});
 
 		function startSnippetEdit(id) {
 			editingId = id;
@@ -2299,7 +2316,10 @@ ${DASHBOARD_BASE_CSS}
 		}
 
 		async function saveSnippetEdit(id) {
-			var row = document.querySelector('.snippet-row[data-id="' + id + '"]');
+			// The editing row is the only one rendered with class "editing", so it is
+			// matched directly instead of by interpolating the id into a selector.
+			var row = document.querySelector(".snippet-row.editing");
+			if (!row) return;
 			var name = row.querySelector(".snippet-edit-name").value;
 			var text = row.querySelector(".snippet-edit-text").value;
 			var next = settings.snippets.map(function(s) { return s.id === id ? { id: id, name: name, text: text } : s; });
