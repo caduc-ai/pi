@@ -13,6 +13,7 @@ import type {
 	SessionStats,
 	SubagentFileData,
 	SubagentRunSummary,
+	ThinkingLevel,
 	ToolResultLike,
 	ToolResultMessage,
 } from "./protocol.ts";
@@ -964,6 +965,31 @@ export async function selectModel(provider: string, modelId: string): Promise<vo
 	await sync();
 }
 
+const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** `/thinking <level>` sets it; bare `/thinking` cycles to the next level. */
+export async function setThinkingLevelCommand(args: string): Promise<void> {
+	const current = sessionState.value?.thinkingLevel ?? "medium";
+	let level: ThinkingLevel;
+	if (args) {
+		const wanted = args.toLowerCase();
+		if (!THINKING_LEVELS.includes(wanted as ThinkingLevel)) {
+			pushToast(`Unknown thinking level "${args}" (use ${THINKING_LEVELS.join(", ")})`, "error");
+			return;
+		}
+		level = wanted as ThinkingLevel;
+	} else {
+		level = THINKING_LEVELS[(THINKING_LEVELS.indexOf(current) + 1) % THINKING_LEVELS.length];
+	}
+	const response = await client.command({ type: "set_thinking_level", level });
+	if (!response.success) {
+		reportFailure(response, "Failed to set thinking level");
+		return;
+	}
+	if (sessionState.value) sessionState.value = { ...sessionState.value, thinkingLevel: level };
+	pushToast(`Thinking level: ${level}`, "info");
+}
+
 /**
  * Execute a builtin slash command (/compact, /new, /model, ...). Returns true
  * when the command was handled here; false when it should go through `prompt`
@@ -1004,6 +1030,11 @@ export async function executeBuiltinCommand(text: string): Promise<boolean> {
 			} else {
 				modelPickerOpen.value = true;
 			}
+			return true;
+		}
+		case "thinking":
+		case "effort": {
+			await setThinkingLevelCommand(args);
 			return true;
 		}
 		case "session": {
