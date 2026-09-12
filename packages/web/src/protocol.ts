@@ -207,6 +207,8 @@ export interface SubagentRunSummary {
 	transcriptBytes?: number;
 	outputPath?: string;
 	outputs?: Array<{ name: string; path: string; bytes: number }>;
+	/** True when only matched via the same-session-directory-tree fallback (see server). */
+	fromEarlierSession?: boolean;
 }
 
 export interface SubagentFileData {
@@ -231,6 +233,8 @@ export type RpcCommand =
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
+	| { id?: string; type: "cycle_thinking_level" }
+	| { id?: string; type: "get_available_thinking_levels" }
 	| { id?: string; type: "compact"; customInstructions?: string }
 	| { id?: string; type: "set_session_name"; name: string }
 	| { id?: string; type: "new_session"; parentSession?: string }
@@ -247,7 +251,13 @@ export type RpcCommand =
 	| { id?: string; type: "terminal_open"; cols?: number; rows?: number }
 	| { id?: string; type: "terminal_input"; data: string }
 	| { id?: string; type: "terminal_resize"; cols: number; rows: number }
-	| { id?: string; type: "terminal_close" };
+	| { id?: string; type: "terminal_close" }
+	// TUI: the real pi interactive TUI attached to this session, same wire shape
+	// as terminal_* above.
+	| { id?: string; type: "tui_open"; cols?: number; rows?: number }
+	| { id?: string; type: "tui_input"; data: string }
+	| { id?: string; type: "tui_resize"; cols: number; rows: number }
+	| { id?: string; type: "tui_close" };
 
 export interface TerminalOpenData {
 	termId: string;
@@ -290,6 +300,9 @@ export type AgentSessionEvent =
 	| { type: "bash_execution_update"; id?: string; delta: string }
 	| { type: "terminal_output"; data: string }
 	| { type: "terminal_exit"; reason?: string }
+	| { type: "tui_output"; data: string }
+	| { type: "tui_exit"; reason?: string }
+	| { type: "session_reloaded" }
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: Record<string, unknown> }
 	| {
 			type: "tool_execution_update";

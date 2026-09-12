@@ -60,6 +60,12 @@ export type RpcCommand =
 	| { id?: string; type: "terminal_resize"; cols: number; rows: number }
 	| { id?: string; type: "terminal_close" }
 
+	// TUI (the real pi interactive TUI attached to this session, see docs/rpc.md)
+	| { id?: string; type: "tui_open"; cols?: number; rows?: number }
+	| { id?: string; type: "tui_input"; data: string }
+	| { id?: string; type: "tui_resize"; cols: number; rows: number }
+	| { id?: string; type: "tui_close" }
+
 	// Session
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "export_html"; outputPath?: string }
@@ -109,6 +115,12 @@ export const RPC_BUILTIN_COMMANDS: ReadonlyArray<{ name: string; description: st
 	{ name: "new", description: "Start a new session" },
 	{ name: "name", description: "Set session display name", argumentHint: "<name>" },
 	{ name: "model", description: "Select model", argumentHint: "<provider/model>" },
+	{
+		name: "thinking",
+		description: "Set thinking level (no argument cycles to the next level)",
+		argumentHint: "[off|minimal|low|medium|high|xhigh|max]",
+	},
+	{ name: "effort", description: "Alias for /thinking", argumentHint: "[level]" },
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "export", description: "Export session to HTML on the server", argumentHint: "[path]" },
 	{ name: "copy", description: "Copy last agent message to clipboard" },
@@ -222,6 +234,18 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "terminal_input"; success: true }
 	| { id?: string; type: "response"; command: "terminal_resize"; success: true }
 	| { id?: string; type: "response"; command: "terminal_close"; success: true }
+
+	// TUI
+	| {
+			id?: string;
+			type: "response";
+			command: "tui_open";
+			success: true;
+			data: { termId: string; cols: number; rows: number; replay: string };
+	  }
+	| { id?: string; type: "response"; command: "tui_input"; success: true }
+	| { id?: string; type: "response"; command: "tui_resize"; success: true }
+	| { id?: string; type: "response"; command: "tui_close"; success: true }
 
 	// Session
 	| { id?: string; type: "response"; command: "get_session_stats"; success: true; data: SessionStats }

@@ -2,6 +2,7 @@ import { useEffect } from "preact/hooks";
 import type { SubagentRunSummary } from "../protocol.ts";
 import {
 	refreshSubagents,
+	retrySubagentFile,
 	selectedRunKey,
 	selectSubagentOutput,
 	selectSubagentRun,
@@ -9,15 +10,29 @@ import {
 	startSubagentPolling,
 	stopSubagentPolling,
 	subagentFile,
+	subagentFileError,
 	subagentLoading,
 	subagentRuns,
 	subagentView,
+	toggleSubagentsPanel,
+	tuiActive,
 } from "../state.ts";
 import { MarkdownView } from "./markdown-view.tsx";
 
 // ============================================================================
 // Formatting helpers
 // ============================================================================
+
+function SubagentsHeader() {
+	return (
+		<div class="subagents-panel-header">
+			<span>Run history</span>
+			<button type="button" class="subagents-back-to-chat" onClick={toggleSubagentsPanel}>
+				← Back to chat
+			</button>
+		</div>
+	);
+}
 
 function formatTime(ms: number | undefined): string {
 	if (!ms || !Number.isFinite(ms)) return "—";
@@ -80,6 +95,26 @@ interface TranscriptLine {
 /** Cap per-entry text so huge tool outputs stay readable in the panel. */
 const MAX_ENTRY_CHARS = 4_000;
 
+/**
+ * Extract readable text from a standard agent session-record `message` field
+ * (`{role, content: [{type: "text", text}, ...]}` or a plain string), used as a
+ * fallback when a line has no top-level `text` (workflow-mode transcripts are the
+ * child's own session .jsonl, not the flat pi-subagents artifact shape below).
+ */
+function extractMessageText(message: unknown): string | undefined {
+	if (!message || typeof message !== "object") return undefined;
+	const content = (message as Record<string, unknown>).content;
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return undefined;
+	const parts: string[] = [];
+	for (const part of content) {
+		if (part && typeof part === "object" && typeof (part as Record<string, unknown>).text === "string") {
+			parts.push((part as Record<string, unknown>).text as string);
+		}
+	}
+	return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
 function parseTranscript(content: string): TranscriptLine[] {
 	const lines: TranscriptLine[] = [];
 	for (const rawLine of content.split("\n")) {
@@ -87,11 +122,25 @@ function parseTranscript(content: string): TranscriptLine[] {
 		if (!line) continue;
 		try {
 			const data = JSON.parse(line) as Record<string, unknown>;
+			const message = data.message as Record<string, unknown> | undefined;
 			const ts =
 				typeof data.ts === "number" ? data.ts : typeof data.timestamp === "string" ? Date.parse(data.timestamp) : 0;
-			const text = typeof data.text === "string" && data.text.trim().length > 0 ? data.text.trim() : undefined;
-			const role = typeof data.role === "string" && data.role ? data.role : "event";
-			const event = typeof data.sourceEventType === "string" ? data.sourceEventType : "";
+			const text =
+				typeof data.text === "string" && data.text.trim().length > 0
+					? data.text.trim()
+					: extractMessageText(message)?.trim();
+			const role =
+				typeof data.role === "string" && data.role
+					? data.role
+					: typeof message?.role === "string" && message.role
+						? (message.role as string)
+						: "event";
+			const event =
+				typeof data.sourceEventType === "string"
+					? data.sourceEventType
+					: typeof data.type === "string"
+						? data.type
+						: "";
 			const metaBits: string[] = [];
 			if (typeof data.model === "string") metaBits.push(data.model);
 			if (typeof data.toolName === "string") metaBits.push(`tool:${data.toolName}`);
@@ -102,6 +151,13 @@ function parseTranscript(content: string): TranscriptLine[] {
 		}
 	}
 	return lines;
+}
+
+/** user/assistant text is prose meant to be read; everything else (tool calls, raw JSON,
+ * bash-style output) is a log line and stays monospace, matching messages.tsx's split
+ * between MarkdownView (prose) and <pre> (logs/output). */
+function isProseRole(role: string): boolean {
+	return role === "user" || role === "assistant";
 }
 
 function TranscriptContent({ content }: { content: string }) {
@@ -126,7 +182,15 @@ function TranscriptContent({ content }: { content: string }) {
 							) : null}
 							{line.meta ? <span class="transcript-meta">{line.meta}</span> : null}
 						</div>
-						{displayText ? <pre class="transcript-text">{displayText}</pre> : null}
+						{displayText ? (
+							isProseRole(line.role) ? (
+								<div class="transcript-prose">
+									<MarkdownView text={displayText} />
+								</div>
+							) : (
+								<pre class="transcript-text">{displayText}</pre>
+							)
+						) : null}
 					</div>
 				);
 			})}
@@ -179,6 +243,12 @@ function RunMeta({ run }: { run: SubagentRunSummary }) {
 			</div>
 			{run.task ? <div class="subagents-task">{run.task}</div> : null}
 			{run.error ? <div class="subagents-error">{run.error}</div> : null}
+			{run.fromEarlierSession ? (
+				<div class="subagents-stale-note">
+					From an earlier session state (fork/new session/reload changed the active session file since this run
+					started).
+				</div>
+			) : null}
 		</div>
 	);
 }
@@ -200,6 +270,12 @@ export function SubagentsPanel() {
 	if (runs.length === 0) {
 		return (
 			<div class="subagents-panel">
+				<SubagentsHeader />
+				{tuiActive.value ? (
+					<div class="subagents-tui-note">
+						TUI is still attached in the background; chat is blocked until it closes.
+					</div>
+				) : null}
 				<div class="subagents-empty">
 					No subagent runs found in this project. Ask pi to delegate work (e.g. “Use scout to investigate this
 					code”) and runs will appear here with their transcripts.
@@ -210,88 +286,137 @@ export function SubagentsPanel() {
 
 	const hasOutput = selected?.outputPath !== undefined;
 	const hasFiles = (selected?.outputs?.length ?? 0) > 0;
+	const earlierSessionCount = runs.filter((run) => run.fromEarlierSession).length;
 
 	return (
 		<div class="subagents-panel">
-			<div class="subagents-tabs">
-				{runs.map((run) => (
-					<button
-						type="button"
-						class={`subagents-tab ${run.key === selectedKey ? "active" : ""}`}
-						title={`${run.agent} · ${run.runId} · ${STATUS_LABEL[run.status]}`}
-						onClick={() => void selectSubagentRun(run.key)}
-					>
-						<span class={`status-dot ${run.status}`} />
-						<span class="subagents-tab-agent">{run.agent}</span>
-						<span class="subagents-tab-runid">{run.runId.slice(0, 6)}</span>
-					</button>
-				))}
-			</div>
-			{selected ? (
-				<div class="subagents-body">
-					<RunMeta run={selected} />
-					<div class="subagents-view-tabs">
-						<button
-							type="button"
-							class={view === "transcript" ? "active" : ""}
-							disabled={!selected.transcriptPath}
-							onClick={() => void setSubagentView("transcript")}
-						>
-							Transcript
-							{selected.transcriptBytes !== undefined ? (
-								<span class="subagents-view-size"> ({formatBytes(selected.transcriptBytes)})</span>
-							) : null}
-						</button>
-						<button
-							type="button"
-							class={view === "output" ? "active" : ""}
-							disabled={!hasOutput}
-							onClick={() => void setSubagentView("output")}
-						>
-							Output
-						</button>
-						{hasFiles ? (
-							<button
-								type="button"
-								class={view === "outputs" ? "active" : ""}
-								onClick={() => void setSubagentView("outputs")}
-							>
-								Files ({selected.outputs?.length})
-							</button>
-						) : null}
-					</div>
-					<div class="subagents-content">
-						{loading && !file ? <div class="subagents-loading">Loading…</div> : null}
-						{view === "outputs" && selected.outputs ? (
-							<div class="subagents-files">
-								{selected.outputs.map((output) => (
-									<button
-										type="button"
-										class={`subagents-file ${file?.path === output.path ? "active" : ""}`}
-										key={output.path}
-										onClick={() => void selectSubagentOutput(output.path)}
-									>
-										<span>{output.name}</span>
-										<span class="subagents-view-size">{formatBytes(output.bytes)}</span>
-									</button>
-								))}
-							</div>
-						) : null}
-						{view === "transcript" && file ? <TranscriptContent content={file.content} /> : null}
-						{view === "output" && file ? (
-							<div class="subagents-output">
-								<MarkdownView text={file.content} />
-							</div>
-						) : null}
-						{view === "outputs" && file && selected.outputs?.some((output) => output.path === file.path) ? (
-							<div class="subagents-output">
-								<MarkdownView text={file.content} />
-							</div>
-						) : null}
-						{file?.truncated ? <div class="subagents-truncated">File truncated at 4MB by the server.</div> : null}
-					</div>
+			<SubagentsHeader />
+			{tuiActive.value ? (
+				<div class="subagents-tui-note">
+					TUI is still attached in the background; chat is blocked until it closes.
 				</div>
 			) : null}
+			{earlierSessionCount > 0 ? (
+				<div class="subagents-tui-note">
+					{earlierSessionCount} run{earlierSessionCount === 1 ? "" : "s"} from an earlier session state (marked
+					below).
+				</div>
+			) : null}
+			<div class="subagents-layout">
+				<div class="subagents-list">
+					{runs.map((run) => (
+						<button
+							type="button"
+							key={run.key}
+							class={`subagents-list-item ${run.key === selectedKey ? "active" : ""}`}
+							title={`${run.agent} · ${run.runId} · ${STATUS_LABEL[run.status]}${run.fromEarlierSession ? " · earlier session" : ""}`}
+							onClick={() => void selectSubagentRun(run.key)}
+						>
+							<div class="subagents-list-item-row">
+								<span class={`status-dot ${run.status}`} />
+								<span class="subagents-list-item-agent">{run.agent}</span>
+								<span class={`subagents-list-status ${run.status}`}>{STATUS_LABEL[run.status]}</span>
+							</div>
+							<div class="subagents-list-item-row">
+								<span class="subagents-list-item-runid">{run.runId.slice(0, 6)}</span>
+								<span class="subagents-list-item-time" title={formatDate(run.startedAt)}>
+									{formatTime(run.startedAt)}
+								</span>
+								{run.fromEarlierSession ? (
+									<span class="subagents-tab-stale" title="From an earlier session state">
+										⏴
+									</span>
+								) : null}
+							</div>
+						</button>
+					))}
+				</div>
+				{selected ? (
+					<div class="subagents-detail">
+						<RunMeta run={selected} />
+						<div class="subagents-view-tabs">
+							<button
+								type="button"
+								class={view === "transcript" ? "active" : ""}
+								disabled={!selected.transcriptPath}
+								onClick={() => void setSubagentView("transcript")}
+							>
+								Transcript
+								{selected.transcriptBytes !== undefined ? (
+									<span class="subagents-view-size"> ({formatBytes(selected.transcriptBytes)})</span>
+								) : null}
+							</button>
+							<button
+								type="button"
+								class={view === "output" ? "active" : ""}
+								disabled={!hasOutput}
+								onClick={() => void setSubagentView("output")}
+							>
+								Output
+							</button>
+							{hasFiles ? (
+								<button
+									type="button"
+									class={view === "outputs" ? "active" : ""}
+									onClick={() => void setSubagentView("outputs")}
+								>
+									Files ({selected.outputs?.length})
+								</button>
+							) : null}
+						</div>
+						<div class="subagents-content">
+							{loading && !file ? <div class="subagents-loading">Loading…</div> : null}
+							{!loading && subagentFileError.value ? (
+								<div class="subagents-error">
+									Failed to load this file.{" "}
+									<button type="button" class="subagents-retry" onClick={() => void retrySubagentFile()}>
+										Retry
+									</button>
+								</div>
+							) : null}
+							{!loading &&
+							!subagentFileError.value &&
+							!file &&
+							view === "transcript" &&
+							!selected.transcriptPath ? (
+								<div class="subagents-empty">No transcript available for this run.</div>
+							) : null}
+							{!loading && !subagentFileError.value && !file && view === "output" && !hasOutput ? (
+								<div class="subagents-empty">No output available for this run.</div>
+							) : null}
+							{view === "outputs" && selected.outputs ? (
+								<div class="subagents-files">
+									{selected.outputs.map((output) => (
+										<button
+											type="button"
+											class={`subagents-file ${file?.path === output.path ? "active" : ""}`}
+											key={output.path}
+											onClick={() => void selectSubagentOutput(output.path)}
+										>
+											<span>{output.name}</span>
+											<span class="subagents-view-size">{formatBytes(output.bytes)}</span>
+										</button>
+									))}
+								</div>
+							) : null}
+							{view === "transcript" && file ? <TranscriptContent content={file.content} /> : null}
+							{view === "output" && file ? (
+								<div class="subagents-output">
+									<MarkdownView text={file.content} />
+								</div>
+							) : null}
+							{view === "outputs" && file && selected.outputs?.some((output) => output.path === file.path) ? (
+								<pre class="subagents-file-content">
+									<code>{file.content}</code>
+								</pre>
+							) : null}
+							{file?.truncated ? (
+								<div class="subagents-truncated">File truncated at 4MB by the server.</div>
+							) : null}
+						</div>
+					</div>
+				) : null}
+			</div>
 		</div>
 	);
 }

@@ -1,5 +1,5 @@
-import { signal } from "@preact/signals";
-import { RpcClient } from "./client.ts";
+import { effect, signal } from "@preact/signals";
+import { INSTANCE_UNREACHABLE_CLOSE_CODE, RpcClient } from "./client.ts";
 import type {
 	AgentMessage,
 	AgentSessionEvent,
@@ -13,9 +13,16 @@ import type {
 	SessionStats,
 	SubagentFileData,
 	SubagentRunSummary,
+	ThinkingLevel,
 	ToolResultLike,
 	ToolResultMessage,
 } from "./protocol.ts";
+import {
+	ASYNC_STATUS_SNAPSHOT_WIDGET_PREFIX,
+	type AsyncStatusSnapshot,
+	countRunningNodes,
+	parseAsyncStatusSnapshotWidgetLine,
+} from "./subagent-status.ts";
 
 export interface ToolDisplayState {
 	name: string;
@@ -38,6 +45,12 @@ export interface Widget {
 }
 
 export const connected = signal(false);
+/**
+ * Set once the WS closes with the "unknown instance" code (4404): the instance is
+ * definitively gone (never existed, or was stopped), not a transient drop, so the
+ * app renders a full-page "session not found" state instead of retrying forever.
+ */
+export const sessionUnreachable = signal(false);
 export const sessionState = signal<RpcSessionState | undefined>(undefined);
 export const messages = signal<AgentMessage[]>([]);
 export const toolStates = signal<Record<string, ToolDisplayState>>({});
@@ -53,6 +66,17 @@ export const dialogQueue = signal<RpcExtensionUIRequest[]>([]);
 export const statusEntries = signal<Record<string, string>>({});
 export const widgets = signal<Record<string, Widget>>({});
 export const editorText = signal("");
+
+/**
+ * Latest parsed pi-subagents live status snapshot (see subagent-status.ts),
+ * extracted out of whichever widget line carries the
+ * PI_SUBAGENT_ASYNC_JSON: prefix. That line is never stored in `widgets` -
+ * WidgetArea only ever sees free-text widget lines. A malformed snapshot line
+ * is dropped silently and the last good snapshot is kept.
+ */
+export const subagentSnapshot = signal<AsyncStatusSnapshot | undefined>(undefined);
+/** Key of the widget currently supplying subagentSnapshot, so clearing that specific widget clears the snapshot too. */
+let subagentSnapshotWidgetKey: string | undefined;
 
 let nextToastId = 1;
 
@@ -71,7 +95,8 @@ export function pushToast(message: string, kind: Toast["kind"] = "info"): void {
 // The app is served at / by pi --web and at /i/<instance-id>/ by pi-server;
 // the WS endpoint is always at <base>ws.
 const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
-const basePath = location.pathname.endsWith("/") ? location.pathname : `${location.pathname}/`;
+/** Same-origin base path this SPA is served under; REST endpoints (subagents, files, ...) hang off it. */
+export const basePath = location.pathname.endsWith("/") ? location.pathname : `${location.pathname}/`;
 /** Supervised instance id when served by pi-server, undefined under `pi --web`. */
 export const instanceId = /^\/i\/([0-9a-f-]{36})\//.exec(basePath)?.[1];
 export const client = new RpcClient(`${wsProtocol}://${location.host}${basePath}ws`, {
@@ -86,11 +111,57 @@ export const client = new RpcClient(`${wsProtocol}://${location.host}${basePath}
 let syncing = false;
 const eventBuffer: AgentSessionEvent[] = [];
 
-function handleConnectionChange(isConnected: boolean): void {
+function handleConnectionChange(isConnected: boolean, closeCode?: number): void {
 	connected.value = isConnected;
 	if (isConnected) {
+		sessionUnreachable.value = false;
 		void sync();
+		// A reconnect is a reasonable moment to also refresh the sidebar's session
+		// list (e.g. another session was pinned/spawned while this one dropped).
+		void refreshSidebarSessions();
+	} else if (closeCode === INSTANCE_UNREACHABLE_CLOSE_CODE) {
+		// The instance id is gone, but the session itself may have come back under
+		// a NEW instance id (server restart respawns pinned sessions). Follow it
+		// before falling back to the full-page "Session not found" state.
+		void followRespawnedSession();
 	}
+}
+
+/**
+ * After a 4404, poll the dashboard API for a live instance backing the same
+ * session file and redirect to it. Pinned sessions auto-respawn on server
+ * restart with a fresh id, so an open tab should follow rather than dead-end.
+ */
+async function followRespawnedSession(): Promise<void> {
+	const sessionFile = sessionState.value?.sessionFile;
+	if (sessionFile) {
+		for (let attempt = 0; attempt < 5; attempt++) {
+			try {
+				const response = await fetch("/api/dashboard-sessions", { cache: "no-store" });
+				if (response.ok) {
+					const data = (await response.json()) as {
+						ok?: boolean;
+						sessions?: Array<{ id?: string; sessionFile?: string; status?: string }>;
+					};
+					const revived = data.sessions?.find(
+						(session) =>
+							session.sessionFile === sessionFile &&
+							session.id &&
+							session.id !== instanceId &&
+							(session.status === "online" || session.status === "starting"),
+					);
+					if (revived) {
+						location.href = `/i/${revived.id}/`;
+						return;
+					}
+				}
+			} catch {
+				// Dashboard unreachable (server still restarting); keep polling.
+			}
+			await new Promise((resolve) => setTimeout(resolve, 2000));
+		}
+	}
+	sessionUnreachable.value = true;
 }
 
 export function dataAs<T>(response: RpcResponse, command: string): T | undefined {
@@ -382,7 +453,30 @@ function applyEvent(event: AgentSessionEvent): void {
 			break;
 
 		case "terminal_exit":
+			// Reset so a later reopen's fresh XTerm doesn't get this session's last
+			// chunk replayed into it the instant it subscribes (signals fire their
+			// current value synchronously on subscribe).
+			terminalOutput.value = undefined;
 			pushToast(event.reason ? `Terminal exited (${event.reason})` : "Terminal exited", "info");
+			break;
+
+		case "tui_output":
+			tuiOutput.value = { data: event.data, seq: tuiOutputSeq++ };
+			break;
+
+		case "tui_exit":
+			tuiActive.value = false;
+			// Same reasoning as terminal_exit above.
+			tuiOutput.value = undefined;
+			pushToast(event.reason ? `TUI exited (${event.reason})` : "TUI exited", "info");
+			void sync();
+			break;
+
+		case "session_reloaded":
+			// The TUI wrote to the session file while still attached (e.g. it
+			// switched models from its own selector); re-sync so the footer and
+			// session state stay live instead of only refreshing on tui_close.
+			void sync();
 			break;
 
 		default:
@@ -418,12 +512,38 @@ function handleUiRequest(request: RpcExtensionUIRequest): void {
 		case "setWidget": {
 			const next = { ...widgets.value };
 			if (request.widgetLines) {
-				next[request.widgetKey] = {
-					lines: request.widgetLines,
-					placement: request.widgetPlacement ?? "aboveEditor",
-				};
+				// Pull out the async status snapshot line, if any, instead of displaying
+				// its raw JSON: the rest of the widget's lines (if it has any) still
+				// render normally.
+				const displayLines: string[] = [];
+				for (const line of request.widgetLines) {
+					const snapshot = parseAsyncStatusSnapshotWidgetLine(line);
+					if (snapshot) {
+						subagentSnapshot.value = snapshot;
+						subagentSnapshotWidgetKey = request.widgetKey;
+						continue;
+					}
+					if (line.startsWith(ASYNC_STATUS_SNAPSHOT_WIDGET_PREFIX)) {
+						// Malformed snapshot JSON: drop the raw line rather than showing it,
+						// keep whatever snapshot we already had.
+						continue;
+					}
+					displayLines.push(line);
+				}
+				if (displayLines.length > 0) {
+					next[request.widgetKey] = {
+						lines: displayLines,
+						placement: request.widgetPlacement ?? "aboveEditor",
+					};
+				} else {
+					delete next[request.widgetKey];
+				}
 			} else {
 				delete next[request.widgetKey];
+				if (subagentSnapshotWidgetKey === request.widgetKey) {
+					subagentSnapshot.value = undefined;
+					subagentSnapshotWidgetKey = undefined;
+				}
 			}
 			widgets.value = next;
 			break;
@@ -495,6 +615,46 @@ export const terminalOpen = signal(false);
 export const terminalOutput = signal<{ data: string; seq: number } | undefined>(undefined);
 let terminalOutputSeq = 0;
 
+/**
+ * Whether the TUI view is showing in place of the chat area. Unlike the
+ * terminal panel, this replaces ChatList/CommandResultCard/WidgetAreas/Editor
+ * rather than docking alongside them: the TUI and the chat view render the
+ * same session and should not both be visible at once.
+ */
+export const tuiActive = signal(false);
+/**
+ * The user asked for the TUI while the session was still streaming/compacting.
+ * Opening a second pi process mid-response would fork the session file, so the
+ * backend refuses; instead of surfacing that as an error we hold the TUI view
+ * in a waiting state and attach automatically the moment the run settles.
+ */
+export const tuiWaiting = signal(false);
+/** Latest TUI output chunk, same shape and purpose as terminalOutput. */
+export const tuiOutput = signal<{ data: string; seq: number } | undefined>(undefined);
+let tuiOutputSeq = 0;
+
+effect(() => {
+	if (tuiWaiting.value && workingMessage.value === undefined) {
+		tuiWaiting.value = false;
+	}
+});
+
+/** Toggle the TUI view. Closing sends tui_close and resyncs the chat view. */
+export async function toggleTui(): Promise<void> {
+	if (tuiActive.value) {
+		tuiActive.value = false;
+		tuiWaiting.value = false;
+		const response = await client.command({ type: "tui_close" });
+		reportFailure(response, "Failed to close TUI");
+		await sync();
+		return;
+	}
+	// Busy: show the TUI view in a waiting state; the effect above attaches it
+	// once the current run settles.
+	tuiWaiting.value = workingMessage.value !== undefined || Boolean(sessionState.value?.isStreaming);
+	tuiActive.value = true;
+}
+
 /** Transient card shown at the bottom of the chat (e.g. /session output). */
 export const commandResult = signal<{ title: string; markdown: string } | undefined>(undefined);
 export const modelPickerOpen = signal(false);
@@ -504,6 +664,13 @@ export const forkPickerOpen = signal(false);
 // Subagent inspection panel
 // ============================================================================
 
+/**
+ * Mobile off-canvas state for the left sidebar (hidden inline below 900px; see
+ * .sidebar in style.css). Desktop ignores this - the sidebar is always inline
+ * there.
+ */
+export const sidebarOpen = signal(false);
+
 export type SubagentView = "transcript" | "output" | "outputs";
 
 export const activePanel = signal<"chat" | "subagents">("chat");
@@ -511,6 +678,8 @@ export const subagentRuns = signal<SubagentRunSummary[]>([]);
 export const selectedRunKey = signal<string | undefined>(undefined);
 export const subagentView = signal<SubagentView>("transcript");
 export const subagentFile = signal<SubagentFileData | undefined>(undefined);
+/** True when the last transcript/output/file fetch failed (fetchSubagentJson already toasted); drives an inline retry state instead of leaving the pane blank. */
+export const subagentFileError = signal(false);
 export const subagentLoading = signal(false);
 export const subagentPolling = signal(false);
 
@@ -518,15 +687,89 @@ export function toggleSubagentsPanel(): void {
 	activePanel.value = activePanel.value === "subagents" ? "chat" : "subagents";
 }
 
-/** REST endpoints live under the same base path as the app (e.g. /i/<id>/subagents). */
+// ============================================================================
+// Agents rail (live subagent activity beside the chat, see agents-rail.tsx)
+// ============================================================================
+
+const AGENTS_RAIL_STORAGE_KEY = "pi-web:agents-rail-open";
+
+function loadStoredAgentsRailOpen(): boolean | undefined {
+	try {
+		const raw = localStorage.getItem(AGENTS_RAIL_STORAGE_KEY);
+		if (raw === "true") return true;
+		if (raw === "false") return false;
+		return undefined;
+	} catch {
+		// Storage unavailable (private mode, disabled cookies, ...): fall back to closed.
+		return undefined;
+	}
+}
+
+const storedAgentsRailOpen = loadStoredAgentsRailOpen();
+export const agentsRailOpen = signal(storedAgentsRailOpen ?? false);
+// Skip auto-open once the user has an explicit stored preference either way.
+let agentsRailAutoOpened = storedAgentsRailOpen !== undefined;
+
+export function toggleAgentsRail(): void {
+	agentsRailOpen.value = !agentsRailOpen.value;
+	try {
+		localStorage.setItem(AGENTS_RAIL_STORAGE_KEY, String(agentsRailOpen.value));
+	} catch {
+		// Best-effort; the toggle still works for the current page load.
+	}
+}
+
+// Auto-reveal the rail the first time live subagent activity shows up, so a
+// user who never touched the toggle still notices background work starting.
+effect(() => {
+	if (agentsRailAutoOpened) return;
+	if (countRunningNodes(subagentSnapshot.value) > 0) {
+		agentsRailAutoOpened = true;
+		agentsRailOpen.value = true;
+	}
+});
+
+/**
+ * Jump from an agents rail node into the existing Subagents panel, focused on
+ * the matching run. Snapshot node ids come from pi-subagents' own asyncId,
+ * which the server's subagent run summaries expose as `runId` (async runs)
+ * or embed in `key` as `async:<runId>`; foreground (non-async) runs never
+ * appear in the snapshot, so this only ever matches async/background runs.
+ * If no run list entry matches yet (e.g. it hasn't been fetched), this still
+ * opens the panel so the user isn't left looking at nothing.
+ */
+export async function focusSubagentRun(nodeId: string): Promise<void> {
+	activePanel.value = "subagents";
+	await refreshSubagents();
+	const match = subagentRuns.value.find((run) => run.runId === nodeId || run.key === `async:${nodeId}`);
+	if (match) {
+		await selectSubagentRun(match.key);
+	}
+}
+
+/**
+ * REST endpoints live under the same base path as the app (e.g. /i/<id>/subagents).
+ * Failures are reported via toast instead of swallowed: a silent failure here reads
+ * to the user as "clicking did nothing" (e.g. a transcript/output tab stays empty).
+ */
 async function fetchSubagentJson<T>(path: string): Promise<T | undefined> {
 	try {
 		const response = await fetch(`${basePath}${path}`, { cache: "no-store" });
-		if (!response.ok) return undefined;
-		const data = (await response.json()) as { ok?: boolean } & Record<string, unknown>;
-		if (data.ok === false) return undefined;
+		if (!response.ok) {
+			pushToast(`Failed to load subagent data: HTTP ${response.status}`, "error");
+			return undefined;
+		}
+		const data = (await response.json()) as { ok?: boolean; error?: string } & Record<string, unknown>;
+		if (data.ok === false) {
+			pushToast(
+				data.error ? `Failed to load subagent data: ${data.error}` : "Failed to load subagent data",
+				"error",
+			);
+			return undefined;
+		}
 		return data as unknown as T;
-	} catch {
+	} catch (error) {
+		pushToast(`Failed to load subagent data: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return undefined;
 	}
 }
@@ -538,11 +781,12 @@ export async function refreshSubagents(): Promise<void> {
 	const previous = subagentRuns.value;
 	subagentRuns.value = runs;
 
-	// Keep the selection stable across refreshes: prefer the same key, then the
-	// first running run, then the first run.
+	// Keep the selection stable across refreshes. If the previously selected run is
+	// gone (or nothing was selected yet), fall back to the first running run, then
+	// the first run.
 	const selected = selectedRunKey.value;
 	if (!selected || !runs.some((run) => run.key === selected)) {
-		const next = runs.find((run) => run.key === selected) ?? runs.find((run) => run.status === "running") ?? runs[0];
+		const next = runs.find((run) => run.status === "running") ?? runs[0];
 		if (next && next.key !== selected) {
 			selectedRunKey.value = next.key;
 			void loadSelectedSubagentFile();
@@ -553,23 +797,40 @@ export async function refreshSubagents(): Promise<void> {
 	}
 }
 
+// Identifies the in-flight request that should be allowed to write subagentFile.
+// Rapid run/tab/output switching can let an older, slower fetch resolve after a
+// newer one; comparing against this object (set synchronously right before the
+// await) discards any response that is no longer the most recently requested one.
+let latestSubagentFileRequest: { key: string | undefined; view: SubagentView; path: string } | undefined;
+
+async function fetchAndSetSubagentFile(key: string | undefined, view: SubagentView, path: string): Promise<void> {
+	const target = { key, view, path };
+	latestSubagentFileRequest = target;
+	subagentLoading.value = true;
+	subagentFileError.value = false;
+	const data = await fetchSubagentJson<SubagentFileData>(`subagents/file?path=${encodeURIComponent(path)}`);
+	if (latestSubagentFileRequest !== target) return;
+	subagentFile.value = data;
+	subagentFileError.value = data === undefined;
+	subagentLoading.value = false;
+}
+
 async function loadSelectedSubagentFile(): Promise<void> {
 	const key = selectedRunKey.value;
 	const run = subagentRuns.value.find((candidate) => candidate.key === key);
 	if (!run) {
 		subagentFile.value = undefined;
+		latestSubagentFileRequest = undefined;
 		return;
 	}
 	const view = subagentView.value;
 	const path = view === "output" ? run.outputPath : view === "outputs" ? run.outputs?.[0]?.path : run.transcriptPath;
 	if (!path) {
 		subagentFile.value = undefined;
+		latestSubagentFileRequest = undefined;
 		return;
 	}
-	subagentLoading.value = true;
-	const data = await fetchSubagentJson<SubagentFileData>(`subagents/file?path=${encodeURIComponent(path)}`);
-	subagentFile.value = data;
-	subagentLoading.value = false;
+	await fetchAndSetSubagentFile(key, view, path);
 }
 
 export async function selectSubagentRun(key: string): Promise<void> {
@@ -583,14 +844,20 @@ export async function selectSubagentRun(key: string): Promise<void> {
 export async function setSubagentView(view: SubagentView): Promise<void> {
 	if (subagentView.value === view) return;
 	subagentView.value = view;
+	// Clear the previous view's content so a slow fetch doesn't briefly show stale
+	// (wrong-view) content, matching selectSubagentRun's behavior.
+	subagentFile.value = undefined;
 	await loadSelectedSubagentFile();
 }
 
 export async function selectSubagentOutput(path: string): Promise<void> {
-	subagentLoading.value = true;
-	const data = await fetchSubagentJson<SubagentFileData>(`subagents/file?path=${encodeURIComponent(path)}`);
-	subagentFile.value = data;
-	subagentLoading.value = false;
+	subagentFile.value = undefined;
+	await fetchAndSetSubagentFile(selectedRunKey.value, "outputs", path);
+}
+
+/** Retry after a failed transcript/output/file fetch (subagentFileError), re-running the same fetch loadSelectedSubagentFile would have made for the current run/view. */
+export async function retrySubagentFile(): Promise<void> {
+	await loadSelectedSubagentFile();
 }
 
 let subagentPollTimer: ReturnType<typeof setInterval> | undefined;
@@ -614,6 +881,136 @@ export function stopSubagentPolling(): void {
 		subagentPollTimer = undefined;
 	}
 	subagentPolling.value = false;
+}
+
+// ============================================================================
+// Pinned sessions sidebar
+// ============================================================================
+
+export interface SidebarSessionSummary {
+	id: string;
+	name: string;
+	status: string;
+	pinned: boolean;
+	// Sort key for the pinned group (ascending, i.e. first-pinned-first); see
+	// listDashboardSessions in packages/server/src/web.ts. undefined when unpinned.
+	pinnedAt?: string;
+	messageCount?: number;
+	// ISO timestamp of the session's last activity, if known.
+	modified?: string;
+	// Account namespace (pi-server concept, see packages/server/src/namespaces.ts);
+	// undefined means the implicit default namespace.
+	namespace?: string;
+}
+
+/** Live sessions in the current namespace, pinned first, for the sidebar's session list. */
+export const sidebarSessions = signal<SidebarSessionSummary[]>([]);
+
+/**
+ * This session's own account namespace (pi-server concept), found by matching
+ * instanceId in the same /api/dashboard-sessions response used for the pinned
+ * sidebar below. undefined under bare `pi --web` (no dashboard-sessions API)
+ * or the implicit default namespace.
+ */
+export const currentNamespace = signal<string | undefined>(undefined);
+
+/**
+ * Live sessions in the current namespace for the sidebar's session list
+ * (pinned first). The dashboard-sessions API is a pi-server/dashboard concept
+ * with no equivalent under bare `pi --web`, so this is a no-op there
+ * (instanceId is undefined).
+ */
+export async function refreshSidebarSessions(): Promise<void> {
+	if (!instanceId) return;
+	try {
+		const res = await fetch("/api/dashboard-sessions");
+		if (!res.ok) return;
+		const data = (await res.json()) as {
+			ok: boolean;
+			sessions?: Array<{
+				id?: string;
+				name: string;
+				status: string;
+				pinned: boolean;
+				pinnedAt?: string;
+				namespace?: string;
+				messageCount?: number;
+				modified?: string;
+			}>;
+		};
+		if (!data.ok || !data.sessions) return;
+		const live = data.sessions.filter(
+			(
+				session,
+			): session is {
+				id: string;
+				name: string;
+				status: string;
+				pinned: boolean;
+				pinnedAt?: string;
+				namespace?: string;
+				messageCount?: number;
+				modified?: string;
+			} => Boolean(session.id) && (session.status === "online" || session.status === "starting"),
+		);
+		// Pinned first, as a FIXED group ordered by pinnedAt ascending (never by
+		// last-accessed, so using a pinned session doesn't reorder it). Everyone
+		// else stays most-recently-active first.
+		live.sort((a, b) => {
+			if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+			if (a.pinned && b.pinned) return (a.pinnedAt ?? "").localeCompare(b.pinnedAt ?? "");
+			return (b.modified ?? "").localeCompare(a.modified ?? "");
+		});
+		sidebarSessions.value = live.map((session) => ({
+			id: session.id,
+			name: session.name,
+			status: session.status,
+			pinned: session.pinned,
+			pinnedAt: session.pinnedAt,
+			namespace: session.namespace,
+			messageCount: session.messageCount,
+			modified: session.modified,
+		}));
+		currentNamespace.value = data.sessions.find((session) => session.id === instanceId)?.namespace;
+	} catch {
+		// Best-effort: the sidebar keeps its last-known list (or stays empty) on failure.
+	}
+}
+
+let sidebarSessionsPollTimer: ReturnType<typeof setInterval> | undefined;
+
+/** Slow poll (not aggressive) since pin/unpin and spawn/stop are infrequent, manual actions. */
+export function startSidebarSessionsPolling(): void {
+	if (sidebarSessionsPollTimer) return;
+	sidebarSessionsPollTimer = setInterval(() => {
+		void refreshSidebarSessions();
+	}, 30_000);
+}
+
+export function stopSidebarSessionsPolling(): void {
+	if (sidebarSessionsPollTimer) {
+		clearInterval(sidebarSessionsPollTimer);
+		sidebarSessionsPollTimer = undefined;
+	}
+}
+
+/** Spawn a new session in the given cwd (dashboard-style POST /api/spawn) and navigate to it. */
+export async function spawnSessionAndNavigate(cwd: string): Promise<void> {
+	try {
+		const res = await fetch("/api/spawn", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd, namespace: currentNamespace.value }),
+		});
+		const data = (await res.json()) as { ok?: boolean; instance?: { id: string }; error?: string };
+		if (!data.ok || !data.instance) {
+			pushToast(data.error || "Failed to spawn a new session", "error");
+			return;
+		}
+		location.href = `/i/${data.instance.id}/`;
+	} catch (error) {
+		pushToast(`Failed to spawn a new session: ${error instanceof Error ? error.message : String(error)}`, "error");
+	}
 }
 
 function formatTokenCount(count: number): string {
@@ -737,6 +1134,45 @@ export async function selectModel(provider: string, modelId: string): Promise<vo
 }
 
 /**
+ * `/thinking <level>` sets it; bare `/thinking` cycles to the next level.
+ * Levels come from the server per model: e.g. Claude Fable can't be set to
+ * "off" and some models lack xhigh/max, and the session silently clamps
+ * unsupported requests - so validate against the real list instead of a
+ * hardcoded one, and let the server do the cycling.
+ */
+export async function setThinkingLevelCommand(args: string): Promise<void> {
+	if (!args) {
+		const response = await client.command({ type: "cycle_thinking_level" });
+		if (!response.success) {
+			reportFailure(response, "Failed to change thinking level");
+			return;
+		}
+		const data = dataAs<{ level: ThinkingLevel } | null>(response, "cycle_thinking_level");
+		if (!data) {
+			pushToast("This model does not support thinking levels", "info");
+			return;
+		}
+		if (sessionState.value) sessionState.value = { ...sessionState.value, thinkingLevel: data.level };
+		pushToast(`Thinking level: ${data.level}`, "info");
+		return;
+	}
+	const available = await client.command({ type: "get_available_thinking_levels" });
+	const levels = dataAs<{ levels: ThinkingLevel[] }>(available, "get_available_thinking_levels")?.levels ?? [];
+	const wanted = args.toLowerCase() as ThinkingLevel;
+	if (!levels.includes(wanted)) {
+		pushToast(`"${args}" is not available for this model (use ${levels.join(", ") || "off"})`, "error");
+		return;
+	}
+	const response = await client.command({ type: "set_thinking_level", level: wanted });
+	if (!response.success) {
+		reportFailure(response, "Failed to set thinking level");
+		return;
+	}
+	if (sessionState.value) sessionState.value = { ...sessionState.value, thinkingLevel: wanted };
+	pushToast(`Thinking level: ${wanted}`, "info");
+}
+
+/**
  * Execute a builtin slash command (/compact, /new, /model, ...). Returns true
  * when the command was handled here; false when it should go through `prompt`
  * (extension/prompt/skill commands).
@@ -776,6 +1212,11 @@ export async function executeBuiltinCommand(text: string): Promise<boolean> {
 			} else {
 				modelPickerOpen.value = true;
 			}
+			return true;
+		}
+		case "thinking":
+		case "effort": {
+			await setThinkingLevelCommand(args);
 			return true;
 		}
 		case "session": {

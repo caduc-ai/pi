@@ -1,15 +1,18 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-	AgentSessionEvent,
-	RpcCommand,
-	RpcExtensionUIRequest,
-	RpcExtensionUIResponse,
-	RpcResponse,
+import {
+	type AgentSessionEvent,
+	ENV_AGENT_DIR,
+	type RpcCommand,
+	type RpcExtensionUIRequest,
+	type RpcExtensionUIResponse,
+	type RpcResponse,
 } from "@earendil-works/pi-coding-agent";
 import { isBunBinary } from "./config.ts";
+import { namespaceAgentDirOverride } from "./namespaces.ts";
 
 interface PendingRequest {
 	resolve(response: RpcResponse): void;
@@ -32,14 +35,31 @@ export class RpcProcessInstance {
 	private readonly exitListeners = new Set<(error?: Error) => void>();
 	private uiRequestHandler: ((request: RpcExtensionUIRequest) => void) | undefined;
 
-	constructor(options: { cwd: string; sessionFile?: string }) {
+	constructor(options: { cwd: string; sessionFile?: string; namespace?: string }) {
 		const rpcCommand = this.getSpawnCommand();
 		if (options.sessionFile) {
 			rpcCommand.args.push("--session", options.sessionFile);
 		}
+		// Non-default namespaces get their own PI_CODING_AGENT_DIR, which points
+		// coding-agent's config paths (auth.json, settings.json, sessions/) at a
+		// separate tree instead of the normal ~/.pi/agent. See namespaces.ts.
+		const namespaceAgentDir = namespaceAgentDirOverride(options.namespace);
+		// CLAUDE_CONFIG_DIR: the builtin claude-bridge provider authenticates via
+		// the Claude Code CLI's own HOME-scoped credentials (~/.claude), entirely
+		// outside pi's auth.json. Without scoping it per namespace, every namespace
+		// silently rides the machine-global Claude login, defeating credential
+		// separation. A fresh namespace therefore starts logged out of Claude too;
+		// run `claude login` inside the session's terminal to opt that namespace in.
+		const env = namespaceAgentDir
+			? {
+					...process.env,
+					[ENV_AGENT_DIR]: namespaceAgentDir,
+					CLAUDE_CONFIG_DIR: join(namespaceAgentDir, "claude"),
+				}
+			: process.env;
 		this.process = spawn(rpcCommand.command, rpcCommand.args, {
 			cwd: options.cwd,
-			env: process.env,
+			env,
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		if (!this.process.stdin || !this.process.stdout) {
@@ -55,18 +75,22 @@ export class RpcProcessInstance {
 				args: ["--mode", "rpc"],
 			};
 		}
+		const rpcEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry"));
+		// Bound each session's V8 heap: on a small host, unbounded children are what
+		// tips systemd-oomd into killing the whole unit (every session at once).
+		const heapFlag = `--max-old-space-size=${process.env.PI_RPC_MAX_OLD_SPACE_MB ?? "512"}`;
+		// Built dist: run it directly. The tsx wrapper below is dev-only, and each
+		// instance of it costs ~60MB RSS plus a second process per session.
+		if (rpcEntry.endsWith(".js") && existsSync(rpcEntry)) {
+			return { command: process.execPath, args: [heapFlag, rpcEntry] };
+		}
 		// Dev mode: run via tsx so TypeScript source works without a build step.
 		const srcDir = dirname(fileURLToPath(import.meta.url));
 		const repoRoot = dirname(dirname(dirname(srcDir)));
 		const tsxBin = join(repoRoot, "node_modules", ".bin", "tsx");
 		return {
 			command: process.execPath,
-			args: [
-				tsxBin,
-				"--tsconfig",
-				join(repoRoot, "tsconfig.json"),
-				fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry")),
-			],
+			args: [heapFlag, tsxBin, "--tsconfig", join(repoRoot, "tsconfig.json"), rpcEntry],
 		};
 	}
 
@@ -109,7 +133,14 @@ export class RpcProcessInstance {
 	}
 
 	private handleLine(line: string): void {
-		const parsed = JSON.parse(line) as { type?: string; id?: string };
+		let parsed: { type?: string; id?: string };
+		try {
+			parsed = JSON.parse(line) as { type?: string; id?: string };
+		} catch {
+			// A malformed line on the child's stdout must not take the whole server
+			// down; drop it and keep serving this and every other instance.
+			return;
+		}
 		switch (parsed.type) {
 			case "response": {
 				if (!parsed.id) {
@@ -206,6 +237,10 @@ export class RpcProcessInstance {
 	}
 }
 
-export function createRpcProcessInstance(options: { cwd: string; sessionFile?: string }): RpcProcessInstance {
+export function createRpcProcessInstance(options: {
+	cwd: string;
+	sessionFile?: string;
+	namespace?: string;
+}): RpcProcessInstance {
 	return new RpcProcessInstance(options);
 }

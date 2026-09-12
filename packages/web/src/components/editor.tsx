@@ -1,5 +1,5 @@
 import { computed, signal } from "@preact/signals";
-import { useRef } from "preact/hooks";
+import { useEffect, useRef } from "preact/hooks";
 import type { ImageContent, RpcSlashCommand } from "../protocol.ts";
 import {
 	editorText,
@@ -14,7 +14,6 @@ import {
 	workingMessage,
 } from "../state.ts";
 
-const AUTOCOMPLETE_MAX_VISIBLE = 8;
 const TUI_BUILTIN_COMMAND_ORDER = new Map(
 	[
 		"settings",
@@ -55,6 +54,70 @@ const pendingImages = signal<ImageContent[]>([]);
 const autocompleteIndex = signal(0);
 const autocompleteDismissed = signal(false);
 const sending = signal(false);
+
+/**
+ * Composer draft, local to this module (Editor is a singleton component).
+ * Deliberately NOT the shared `editorText` signal: writing that signal on
+ * every keystroke would make it a shared dependency other components could
+ * accidentally subscribe to, turning every keystroke into an app-wide
+ * re-render trigger. Only this file (and the autocomplete computeds below)
+ * reads `draftText`; `editorText` remains as a one-way channel FROM the rest
+ * of the app INTO the composer (extension `set_editor_text` requests, /fork),
+ * synced into `draftText` by the effect in Editor below.
+ */
+const draftText = signal("");
+
+// Snippet picker: reusable text chunks managed on the dashboard's /settings
+// page (server-persisted), inserted at the composer cursor - never auto-sent.
+interface Snippet {
+	id: string;
+	name: string;
+	text: string;
+}
+const SNIPPET_CACHE_MS = 30_000;
+const snippetPickerOpen = signal(false);
+const snippetQuery = signal("");
+const snippetIndex = signal(0);
+const snippets = signal<Snippet[]>([]);
+const snippetsLoading = signal(false);
+let snippetsFetchedAt = 0;
+
+async function loadSnippets(): Promise<void> {
+	if (Date.now() - snippetsFetchedAt < SNIPPET_CACHE_MS) return;
+	snippetsLoading.value = true;
+	try {
+		// Absolute path: works same-origin from under /i/<id>/.
+		const response = await fetch("/api/snippets", { cache: "no-store" });
+		if (!response.ok) throw new Error(`HTTP ${response.status}`);
+		const data = (await response.json()) as { ok?: boolean; snippets?: Snippet[] };
+		snippets.value = data.snippets ?? [];
+		snippetsFetchedAt = Date.now();
+	} catch (error) {
+		pushToast(`Failed to load snippets: ${error instanceof Error ? error.message : String(error)}`, "error");
+	} finally {
+		snippetsLoading.value = false;
+	}
+}
+
+const snippetMatches = computed(() => fuzzyFilter(snippets.value, snippetQuery.value, (snippet) => snippet.name));
+
+function insertAtCursor(textarea: HTMLTextAreaElement | null, text: string): void {
+	const current = draftText.value;
+	const start = textarea?.selectionStart ?? current.length;
+	const end = textarea?.selectionEnd ?? current.length;
+	const before = current.slice(0, start);
+	const after = current.slice(end);
+	// Keep the snippet on its own line boundary when dropped mid-text.
+	const lead = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
+	const trail = after.length > 0 && !after.startsWith("\n") ? "\n" : "";
+	draftText.value = `${before}${lead}${text}${trail}${after}`;
+	const caret = before.length + lead.length + text.length;
+	queueMicrotask(() => {
+		if (!textarea) return;
+		textarea.focus();
+		textarea.setSelectionRange(caret, caret);
+	});
+}
 
 function fuzzyMatch(query: string, text: string): { matches: boolean; score: number } {
 	const queryLower = query.toLowerCase();
@@ -182,7 +245,7 @@ function formatAutocompleteDescription(command: RpcSlashCommand): string | undef
 }
 
 const autocompleteQuery = computed(() => {
-	const text = editorText.value;
+	const text = draftText.value;
 	if (!text.startsWith("/") || text.includes(" ") || autocompleteDismissed.value) {
 		return undefined;
 	}
@@ -200,20 +263,6 @@ const autocompleteOpen = computed(() => autocompleteMatches.value.length > 0);
 function getSelectedAutocompleteIndex(matches: RpcSlashCommand[]): number {
 	return matches.length === 0 ? -1 : Math.min(autocompleteIndex.value, matches.length - 1);
 }
-
-const visibleAutocompleteMatches = computed(() => {
-	const matches = autocompleteMatches.value;
-	const selectedIndex = getSelectedAutocompleteIndex(matches);
-	if (selectedIndex === -1) return [];
-	const startIndex = Math.max(
-		0,
-		Math.min(selectedIndex - Math.floor(AUTOCOMPLETE_MAX_VISIBLE / 2), matches.length - AUTOCOMPLETE_MAX_VISIBLE),
-	);
-	return matches.slice(startIndex, startIndex + AUTOCOMPLETE_MAX_VISIBLE).map((command, offset) => ({
-		command,
-		index: startIndex + offset,
-	}));
-});
 
 const isBusy = computed(() => sessionState.value?.isStreaming === true || workingMessage.value !== undefined);
 
@@ -235,12 +284,12 @@ function readFileAsImage(file: File): Promise<ImageContent> {
 }
 
 async function send(): Promise<void> {
-	const text = editorText.value.trim();
+	const text = draftText.value.trim();
 	const images = pendingImages.value;
 	if (sending.value || (text === "" && images.length === 0)) return;
 	if (text === "") return;
 	sending.value = true;
-	editorText.value = "";
+	draftText.value = "";
 	pendingImages.value = [];
 	autocompleteDismissed.value = false;
 	try {
@@ -261,12 +310,89 @@ async function send(): Promise<void> {
 
 export function Editor() {
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const pickerRef = useRef<HTMLDivElement>(null);
+	const autocompleteListRef = useRef<HTMLDivElement>(null);
+	const snippetListRef = useRef<HTMLDivElement>(null);
 
 	const autoGrow = () => {
 		const el = textareaRef.current;
 		if (!el) return;
 		el.style.height = "auto";
 		el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+	};
+
+	// External writers (extension `set_editor_text`, /fork) publish through the
+	// shared `editorText` signal; adopt those into the local draft. Typing never
+	// writes `editorText`, so this only fires on those rare external pushes.
+	const pushedText = editorText.value;
+	useEffect(() => {
+		if (pushedText !== draftText.peek()) {
+			draftText.value = pushedText;
+			queueMicrotask(autoGrow);
+		}
+	}, [pushedText]);
+
+	const selectedAutocompleteIndex = getSelectedAutocompleteIndex(autocompleteMatches.value);
+	useEffect(() => {
+		autocompleteListRef.current?.querySelector(".autocomplete-entry.selected")?.scrollIntoView({ block: "nearest" });
+	}, [selectedAutocompleteIndex]);
+
+	const selectedSnippetIndex = Math.min(snippetIndex.value, Math.max(snippetMatches.value.length - 1, 0));
+	useEffect(() => {
+		snippetListRef.current?.querySelector(".snippet-entry.selected")?.scrollIntoView({ block: "nearest" });
+	}, [selectedSnippetIndex]);
+
+	const closeSnippetPicker = () => {
+		snippetPickerOpen.value = false;
+		snippetQuery.value = "";
+		snippetIndex.value = 0;
+	};
+
+	const chooseSnippet = (snippet: Snippet) => {
+		insertAtCursor(textareaRef.current, snippet.text);
+		closeSnippetPicker();
+		queueMicrotask(autoGrow);
+	};
+
+	const openSnippetPicker = () => {
+		snippetPickerOpen.value = true;
+		snippetIndex.value = 0;
+		void loadSnippets();
+	};
+
+	// Close on outside click.
+	useEffect(() => {
+		if (!snippetPickerOpen.value) return;
+		const onMouseDown = (event: MouseEvent) => {
+			if (!pickerRef.current?.contains(event.target as Node)) closeSnippetPicker();
+		};
+		document.addEventListener("mousedown", onMouseDown);
+		return () => document.removeEventListener("mousedown", onMouseDown);
+	}, [snippetPickerOpen.value]);
+
+	const handleSnippetKeyDown = (event: KeyboardEvent) => {
+		const matches = snippetMatches.value;
+		if (event.key === "Escape") {
+			event.preventDefault();
+			closeSnippetPicker();
+			textareaRef.current?.focus();
+			return;
+		}
+		if (event.key === "ArrowDown" && matches.length > 0) {
+			event.preventDefault();
+			snippetIndex.value = (snippetIndex.value + 1) % matches.length;
+			return;
+		}
+		if (event.key === "ArrowUp" && matches.length > 0) {
+			event.preventDefault();
+			snippetIndex.value = (snippetIndex.value - 1 + matches.length) % matches.length;
+			return;
+		}
+		if (event.key === "Enter") {
+			event.preventDefault();
+			const selected = matches[Math.min(snippetIndex.value, matches.length - 1)];
+			if (selected) chooseSnippet(selected);
+		}
 	};
 
 	const handleKeyDown = (event: KeyboardEvent) => {
@@ -287,7 +413,7 @@ export function Editor() {
 				event.preventDefault();
 				const selected = matches[selectedIndex];
 				if (selected) {
-					editorText.value = `/${selected.name} `;
+					draftText.value = `/${selected.name} `;
 					autocompleteDismissed.value = true;
 					autoGrow();
 				}
@@ -355,15 +481,15 @@ export function Editor() {
 				</div>
 			)}
 			{autocompleteOpen.value && (
-				<div class="autocomplete">
-					{visibleAutocompleteMatches.value.map(({ command, index }) => (
+				<div class="autocomplete" ref={autocompleteListRef}>
+					{autocompleteMatches.value.map((command, index) => (
 						<button
 							key={`${command.source}:${command.name}`}
 							type="button"
 							class={`autocomplete-entry ${index === getSelectedAutocompleteIndex(autocompleteMatches.value) ? "selected" : ""}`}
 							onMouseDown={(event) => {
 								event.preventDefault();
-								editorText.value = `/${command.name} `;
+								draftText.value = `/${command.name} `;
 								autocompleteDismissed.value = true;
 								textareaRef.current?.focus();
 							}}
@@ -374,25 +500,71 @@ export function Editor() {
 							)}
 						</button>
 					))}
-					{autocompleteMatches.value.length > AUTOCOMPLETE_MAX_VISIBLE && (
-						<div class="autocomplete-scroll-info">
-							({getSelectedAutocompleteIndex(autocompleteMatches.value) + 1}/{autocompleteMatches.value.length})
-						</div>
-					)}
 				</div>
 			)}
 			<div class="editor-row">
+				{snippetPickerOpen.value && (
+					<div class="snippet-picker" ref={pickerRef}>
+						<input
+							type="text"
+							class="snippet-filter"
+							placeholder="Filter snippets…"
+							value={snippetQuery.value}
+							// biome-ignore lint/a11y/noAutofocus: the picker is an explicitly opened popover
+							autoFocus
+							onInput={(event) => {
+								snippetQuery.value = (event.target as HTMLInputElement).value;
+								snippetIndex.value = 0;
+							}}
+							onKeyDown={handleSnippetKeyDown}
+						/>
+						<div class="snippet-list" ref={snippetListRef}>
+							{snippetsLoading.value && snippets.value.length === 0 ? (
+								<div class="snippet-empty">Loading…</div>
+							) : snippets.value.length === 0 ? (
+								<div class="snippet-empty">
+									No snippets yet — add some in <a href="/settings">Settings</a>
+								</div>
+							) : snippetMatches.value.length === 0 ? (
+								<div class="snippet-empty">No matches</div>
+							) : (
+								snippetMatches.value.map((snippet, index) => (
+									<button
+										key={snippet.id}
+										type="button"
+										class={`snippet-entry ${index === Math.min(snippetIndex.value, snippetMatches.value.length - 1) ? "selected" : ""}`}
+										onMouseDown={(event) => {
+											event.preventDefault();
+											chooseSnippet(snippet);
+										}}
+									>
+										<span class="snippet-name">{snippet.name}</span>
+										<span class="snippet-preview">{snippet.text.split("\n")[0]}</span>
+									</button>
+								))
+							)}
+						</div>
+					</div>
+				)}
+				<button
+					type="button"
+					class={`editor-button snippets ${snippetPickerOpen.value ? "active" : ""}`}
+					title="Insert snippet"
+					onClick={() => (snippetPickerOpen.value ? closeSnippetPicker() : openSnippetPicker())}
+				>
+					{"{}"}
+				</button>
 				<textarea
 					ref={textareaRef}
 					class="editor-input"
 					placeholder={isBusy.value ? "Steer the agent…" : "Send a message…"}
 					rows={1}
 					enterkeyhint={isCoarsePointer ? "enter" : "send"}
-					value={editorText.value}
+					value={draftText.value}
 					onInput={(event) => {
-						editorText.value = (event.target as HTMLTextAreaElement).value;
+						draftText.value = (event.target as HTMLTextAreaElement).value;
 						autocompleteIndex.value = 0;
-						if (!editorText.value.startsWith("/")) {
+						if (!draftText.value.startsWith("/")) {
 							autocompleteDismissed.value = false;
 						}
 						autoGrow();
@@ -406,7 +578,17 @@ export function Editor() {
 					</button>
 				) : null}
 				<button type="button" class="editor-button send" title="Send" onClick={() => void send()}>
-					▲
+					<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+						<title>Send</title>
+						<path
+							d="M3 8h10M9 4l4 4-4 4"
+							stroke="currentColor"
+							stroke-width="1.6"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						/>
+					</svg>
+					Send
 				</button>
 			</div>
 		</div>
