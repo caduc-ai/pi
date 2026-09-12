@@ -2122,6 +2122,34 @@ samp {
 	min-height: 0;
 }
 
+.subagents-panel-header {
+	align-items: center;
+	border-bottom: 1px solid var(--border);
+	display: flex;
+	flex: 0 0 auto;
+	font-size: var(--font-sm);
+	font-weight: 600;
+	justify-content: space-between;
+	min-height: 44px;
+	padding: var(--sp-2) var(--sp-3);
+}
+
+.subagents-back-to-chat {
+	background: transparent;
+	border: 0;
+	border-radius: var(--radius-sm);
+	color: var(--text-muted);
+	cursor: pointer;
+	font: inherit;
+	font-weight: 400;
+	padding: var(--sp-2);
+}
+
+.subagents-back-to-chat:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
 .subagents-empty {
 	color: var(--text-muted);
 	font-size: 13px;

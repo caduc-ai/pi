@@ -14,6 +14,7 @@ import {
 	subagentLoading,
 	subagentRuns,
 	subagentView,
+	toggleSubagentsPanel,
 	tuiActive,
 } from "../state.ts";
 import { MarkdownView } from "./markdown-view.tsx";
@@ -21,6 +22,17 @@ import { MarkdownView } from "./markdown-view.tsx";
 // ============================================================================
 // Formatting helpers
 // ============================================================================
+
+function SubagentsHeader() {
+	return (
+		<div class="subagents-panel-header">
+			<span>Run history</span>
+			<button type="button" class="subagents-back-to-chat" onClick={toggleSubagentsPanel}>
+				← Back to chat
+			</button>
+		</div>
+	);
+}
 
 function formatTime(ms: number | undefined): string {
 	if (!ms || !Number.isFinite(ms)) return "—";
@@ -258,6 +270,7 @@ export function SubagentsPanel() {
 	if (runs.length === 0) {
 		return (
 			<div class="subagents-panel">
+				<SubagentsHeader />
 				{tuiActive.value ? (
 					<div class="subagents-tui-note">
 						TUI is still attached in the background; chat is blocked until it closes.
@@ -277,6 +290,7 @@ export function SubagentsPanel() {
 
 	return (
 		<div class="subagents-panel">
+			<SubagentsHeader />
 			{tuiActive.value ? (
 				<div class="subagents-tui-note">
 					TUI is still attached in the background; chat is blocked until it closes.

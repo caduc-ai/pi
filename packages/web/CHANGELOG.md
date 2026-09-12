@@ -33,6 +33,7 @@
 ### Fixed
 
 - Fixed named files in the Subagents panel being rendered as Markdown, which interpreted TSX/HTML-like source as markup; files now render literally in a scrollable code viewer.
+- Added a persistent “Back to chat” control to the run-history inspector so it remains dismissible after consolidating the topbar to a single Agents button.
 
 - Fixed three header/sidebar/tool-copy-button hover and text-color rules referencing `--pi-bgHover`, `--pi-fg`, and `--pi-textMuted`, CSS custom properties no theme (`dark.json`, `light.json`, or any custom theme) ever defines; these hover states silently did nothing in every theme. They now use the existing `--pi-selectedBg` and `--pi-text`/`--pi-muted` variables the rest of the app already relies on.
 - Fixed web slash command autocomplete to keep scrolling through all matches and order commands like the TUI.
