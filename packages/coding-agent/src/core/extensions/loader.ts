@@ -454,7 +454,14 @@ function createExtensionAPI(
 			},
 			on(channel, handler) {
 				assertActive();
-				const unsubscribe = runtime.trackEventBusSubscription(eventBus.on(channel, handler));
+				// EventBus.on is overloaded (single channel vs "*" wildcard), so the
+				// handler is inferred as a union here; dispatch to the matching overload
+				// the same way createEventBus does internally.
+				const subscription =
+					channel === "*"
+						? eventBus.on("*", handler as (channel: string, data: unknown) => void)
+						: eventBus.on(channel, handler as (data: unknown) => void);
+				const unsubscribe = runtime.trackEventBusSubscription(subscription);
 				if (state === "loading") loadingUnsubscribers.push(unsubscribe);
 				return unsubscribe;
 			},

@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed the Google finish-reason mapping not handling `TOO_MANY_TOOL_CALLS` (added in `@google/genai` 2.21.0), which failed the exhaustive check; it now maps to `error` like the other abnormal reasons.
 - Added `RetryPolicy.maxAgentDelayMs` support to cap shared assistant retry backoff for summarization calls ([#8826](https://github.com/earendil-works/pi/issues/8826)).
 - Fixed quadratic CPU usage when draining buffered `EventStream` events ([#9055](https://github.com/earendil-works/pi/issues/9055)).
 - Fixed Mistral Medium reasoning requests to use `reasoning_effort` for all reasoning-capable `mistral-medium-*` model IDs instead of the unsupported `prompt_mode` ([#8700](https://github.com/earendil-works/pi/issues/8700)).
